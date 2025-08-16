@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestor de Fotos de Entradas</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📸</text></svg>">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            color: white;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .price-indicator {
+            background: rgba(255,255,255,0.2);
+            padding: 8px 20px;
+            border-radius: 25px;
+            font-size: 1rem;
+            margin-top: 10px;
+            display: inline-block;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+
+        .card {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            padding: 30px;
+            margin-bottom: 25px;
+            backdrop-filter: blur(10px);
+        }
+
+        .photo-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .photo-btn {
+            padding: 25px 20px;
+            border: none;
+            border-radius: 15px;
+            font-size: 1.3rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .photo-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: left 0.5s;
+        }
+
+        .photo-btn:hover::before {
+            left: 100%;
+        }
+
+        .photo-btn:active {
+            transform: scale(0.98);
+        }
+
+        .btn-general {
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white;
+            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
+        }
+
+        .btn-general:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(76, 175, 80, 0.4);
+        }
+
+        .btn-vip {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a52);
+            color: white;
+            box-shadow: 0 4px 15px rgba(238, 90, 82, 0.3);
+        }
+
+        .btn-vip:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(238, 90, 82, 0.4);
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .preview {
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        .preview img {
+            max-width: 100%;
+            max-height: 400px;
+            border-radius: 15px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+        }
+
+        .upload-btn {
+            background: linear-gradient(45deg, #2196F3, #1976D2);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-size: 1.1rem;
+            cursor: pointer;
+            margin: 10px;
+            transition: all 0.3s ease;
+            font-weight: 600;
+        }
+
+        .upload-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(33, 150, 243, 0.4);
+        }
+
+        .upload-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .cancel-btn {
+            background: linear-gradient(45deg, #f44336, #d32f2f);
+        }
+
+        .cancel-btn:hover {
+            box-shadow: 0 5px 15px rgba(244, 67, 54, 0.4);
+        }
+
+        .status {
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin: 15px 0;
+            font-weight: 600;
+            text-align: center;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .status.success {
+            background: linear-gradient(45deg, #d4edda, #c3e6cb);
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.error {
+            background: linear-gradient(45deg, #f8d7da, #f5c6cb);
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+            padding: 25px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .stat-number {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #495057;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: #6c757d;
+            font-size: 1rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .price-config {
+            background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+            padding: 25px;
+            border-radius: 15px;
+            margin-bottom: 25px;
+        }
+
+        .price-input-group {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin: 15px 0;
+            flex-wrap: wrap;
+        }
+
+        .price-input-group label {
+            font-weight: 600;
+            color: #495057;
+            min-width: 140px;
+        }
+
+        .price-input {
+            padding: 12px 15px;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            font-size: 1rem;
+            width: 120px;
+            transition: border-color 0.3s ease;
+        }
+
+        .price-input:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+        }
+
+        .update-btn {
+            background: linear-gradient(45deg, #28a745, #218838);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .update-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);
+        }
+
+        .gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 25px;
+        }
+
+        .photo-item {
+            background: white;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.15);
+            transition: all 0.3s ease;
+        }
+
+        .photo-item:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+        }
+
+        .photo-item img {
+            width: 100%;
+            height: 180px;
+            object-fit: cover;
+        }
+
+        .photo-info {
+            padding: 15px;
+            text-align: center;
+        }
+
+        .photo-type {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: bold;
+            display: inline-block;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .type-general {
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white;
+        }
+
+        .type-vip {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a52);
+            color: white;
+        }
+
+        .price-tag {
+            background: linear-gradient(45deg, #f8f9fa, #e9ecef);
+            color: #495057;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            font-weight: bold;
+            margin-left: 8px;
+            border: 1px solid #dee2e6;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .section-title {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #495057;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .refresh-btn {
+            background: linear-gradient(45deg, #6c757d, #495057);
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            margin-left: auto;
+            transition: all 0.3s ease;
+        }
+
+        .refresh-btn:hover {
+            transform: scale(1.05);
+        }
+
+        @media (max-width: 768px) {
+            .photo-buttons {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+
+            .container {
+                padding: 15px;
+            }
+
+            .card {
+                padding: 20px;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 15px;
+            }
+
+            .price-input-group {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 10px;
+            }
+
+            .price-input-group label {
+                min-width: auto;
+            }
+
+            .gallery {
+                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+                gap: 15px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .header h1 {
+                font-size: 1.8rem;
+            }
+
+            .photo-btn {
+                font-size: 1.1rem;
+                padding: 20px 15px;
+            }
+
+            .stat-number {
+                font-size: 2rem;
+            }
+
+            .gallery {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📸 Gestor de Fotos de Entradas</h1>
+            <p>Selecciona el tipo de entrada y toma la foto</p>
+            <div class="price-indicator" id="priceIndicator">
+                Cargando precios...
+            </div>
+        </div>
+
+        <!-- Estadísticas -->
+        <div class="card">
+            <div class="section-title">
+                📊 Estadísticas del Día
+                <button class="refresh-btn" onclick="loadStats()" title="Actualizar estadísticas">
+                    🔄 Actualizar
+                </button>
+            </div>
+            <div class="stats-grid" id="statsGrid">
+                <div class="stat-card">
+                    <div class="stat-number" id="totalHoy">$0</div>
+                    <div class="stat-label">Total Hoy</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="generalHoy">0</div>
+                    <div class="stat-label">General Hoy</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="vipHoy">0</div>
+                    <div class="stat-label">VIP Hoy</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="totalGeneral">$0</div>
+                    <div class="stat-label">Total Recaudado</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Configuración de Precios -->
+        <div class="card">
+            <h3 class="section-title">💰 Configurar Precios</h3>
+            <div class="price-config">
+                <div class="price-input-group">
+                    <label>Entrada General:</label>
+                    <span>$</span>
+                    <input type="number" id="precioGeneral" class="price-input" step="0.01" min="0" placeholder="0.00">
+                    <button class="update-btn" onclick="updatePrice('general')">Actualizar</button>
+                </div>
+                <div class="price-input-group">
+                    <label>Entrada VIP:</label>
+                    <span>$</span>
+                    <input type="number" id="precioVip" class="price-input" step="0.01" min="0" placeholder="0.00">
+                    <button class="update-btn" onclick="updatePrice('vip')">Actualizar</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tomar Fotos -->
+        <div class="card">
+            <h3 class="section-title">📷 Tomar Fotos</h3>
+            <div class="photo-buttons">
+                <button class="photo-btn btn-general" onclick="selectPhotoType('general')">
+                    🎫 Tomar Foto General
+                </button>
+                <button class="photo-btn btn-vip" onclick="selectPhotoType('vip')">
+                    ⭐ Tomar Foto VIP
+                </button>
+            </div>
+
+            <input type="file" id="photoInput" accept="image/*" capture="environment" class="hidden">
+            
+            <div id="photoPreview" class="preview hidden">
+                <img id="previewImg" src="" alt="Preview">
+                <div>
+                    <button class="upload-btn" onclick="uploadPhoto()">
+                        <span id="uploadText">📤 Subir Foto</span>
+                        <span id="uploadLoading" class="loading hidden"></span>
+                    </button>
+                    <button class="upload-btn cancel-btn" onclick="cancelPhoto()">
+                        ❌ Cancelar
+                    </button>
+                </div>
+            </div>
+
+            <div id="status"></div>
+        </div>
+
+        <!-- Galería de Fotos -->
+        <div class="card">
+            <div class="section-title">
+                📷 Fotos Guardadas
+                <button class="refresh-btn" onclick="loadGallery()" title="Actualizar galería">
+                    🔄 Actualizar
+                </button>
+            </div>
+            <div id="gallery" class="gallery">
+                <div style="text-align: center; color: #666; grid-column: 1/-1;">
+                    Cargando fotos...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let selectedType = '';
+        let selectedFile = null;
+        let currentPrices = { general: 0, vip: 0 };
+
+        // Función para seleccionar tipo de foto
+        function selectPhotoType(type) {
+            selectedType = type;
+            document.getElementById('photoInput').click();
+        }
+
+        // Event listener para el input de archivos
+        document.getElementById('photoInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                // Validar que sea una imagen
+                if (!file.type.startsWith('image/')) {
+                    showStatus('Por favor selecciona un archivo de imagen válido', 'error');
+                    return;
+                }
+
+                // Validar tamaño (10MB máximo)
+                if (file.size > 10 * 1024 * 1024) {
+                    showStatus('El archivo es muy grande. Máximo 10MB.', 'error');
+                    return;
+                }
+
+                selectedFile = file;
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    document.getElementById('previewImg').src = e.target.result;
+                    document.getElementById('photoPreview').classList.remove('hidden');
+                }
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Función para cancelar la foto
+        function cancelPhoto() {
+            selectedFile = null;
+            selectedType = '';
+            document.getElementById('photoPreview').classList.add('hidden');
+            document.getElementById('photoInput').value = '';
+            clearStatus();
+        }
+
+        // Función para subir la foto
+        async function uploadPhoto() {
+            if (!selectedFile || !selectedType) {
+                showStatus('Error: No hay foto o tipo seleccionado', 'error');
+                return;
+            }
+
+            const uploadBtn = document.querySelector('.upload-btn');
+            const uploadText = document.getElementById('uploadText');
+            const uploadLoading = document.getElementById('uploadLoading');
+
+            // Mostrar loading
+            uploadBtn.disabled = true;
+            uploadText.classList.add('hidden');
+            uploadLoading.classList.remove('hidden');
+
+            const formData = new FormData();
+            formData.append('photo', selectedFile);
+            formData.append('tipo', selectedType);
+
+            try {
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showStatus(result.message, 'success');
+                    cancelPhoto();
+                    loadGallery();
+                    loadStats();
+                } else {
+                    showStatus(result.error || 'Error al subir la foto', 'error');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showStatus('Error de conexión. Verifica tu internet.', 'error');
+            } finally {
+                // Ocultar loading
+                uploadBtn.disabled = false;
+                uploadText.classList.remove('hidden');
+                uploadLoading.classList.add('hidden');
+            }
+        }
+
+        // Función para mostrar mensajes de estado
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = message;
+            
+            // Auto-ocultar después de 5 segundos
+            setTimeout(() => {
+                statusDiv.className = '';
+                statusDiv.textContent = '';
+            }, 5000);
+        }
+
+        // Función para limpiar el estado
+        function clearStatus() {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = '';
+            statusDiv.textContent = '';
+        }
+
+        // Función para cargar la galería
+        async function loadGallery() {
+            try {
+                const response = await fetch('/api/photos');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const photos = await response.json();
+                const gallery = document.getElementById('gallery');
+                gallery.innerHTML = '';
+
+                if (photos.length === 0) {
+                    gallery.innerHTML = '<div style="text-align: center; color: #666; grid-column: 1/-1; padding: 40px;"><p>📷 No hay fotos guardadas aún</p><p style="font-size: 0.9rem; margin-top: 10px;">¡Toma tu primera foto!</p></div>';
+                    return;
+                }
+
+                photos.forEach(photo => {
+                    const photoElement = document.createElement('div');
+                    photoElement.className = 'photo-item';
+                    
+                    const fecha = new Date(photo.timestamp).toLocaleString('es-ES', {
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+
+                    photoElement.innerHTML = `
+                        <img src="${photo.cloudinary_url}" alt="${photo.tipo}" loading="lazy" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjE4MCIgdmlld0JveD0iMCAwIDIwMCAxODAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIyMDAiIGhlaWdodD0iMTgwIiBmaWxsPSIjZjhmOWZhIi8+Cjx0ZXh0IHg9IjEwMCIgeT0iOTAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiM2Yzc1N2QiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCI+SW1hZ2VuIG5vIGRpc3BvbmlibGU8L3RleHQ+Cjwvc3ZnPgo='">
+                        <div class="photo-info">
+                            <div>
+                                <span class="photo-type type-${photo.tipo}">${photo.tipo.toUpperCase()}</span>
+                                <span class="price-tag">${parseFloat(photo.precio).toFixed(2)}</span>
+                            </div>
+                            <div style="font-size: 0.8rem; color: #666; margin-top: 8px;">
+                                ${fecha}
+                            </div>
+                        </div>
+                    `;
+                    gallery.appendChild(photoElement);
+                });
+
+            } catch (error) {
+                console.error('Error al cargar galería:', error);
+                const gallery = document.getElementById('gallery');
+                gallery.innerHTML = '<div style="text-align: center; color: #dc3545; grid-column: 1/-1; padding: 40px;">❌ Error al cargar las fotos<br><small>Verifica tu conexión</small></div>';
+            }
+        }
+
+        // Función para cargar precios
+        async function loadPrices() {
+            try {
+                const response = await fetch('/api/precios');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const precios = await response.json();
+                
+                precios.forEach(precio => {
+                    currentPrices[precio.tipo] = parseFloat(precio.precio);
+                    
+                    if (precio.tipo === 'general') {
+                        document.getElementById('precioGeneral').value = precio.precio;
+                    } else if (precio.tipo === 'vip') {
+                        document.getElementById('precioVip').value = precio.precio;
+                    }
+                });
+
+                // Actualizar indicador de precios
+                document.getElementById('priceIndicator').textContent = 
+                    `General: ${currentPrices.general.toFixed(2)} | VIP: ${currentPrices.vip.toFixed(2)}`;
+
+            } catch (error) {
+                console.error('Error al cargar precios:', error);
+                document.getElementById('priceIndicator').textContent = 'Error al cargar precios';
+            }
+        }
+
+        // Función para actualizar precios
+        async function updatePrice(tipo) {
+            const inputId = tipo === 'general' ? 'precioGeneral' : 'precioVip';
+            const precio = document.getElementById(inputId).value;
+
+            if (!precio || precio < 0) {
+                showStatus('Por favor ingresa un precio válido', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/precios/${tipo}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ precio: parseFloat(precio) })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showStatus(result.message, 'success');
+                    loadPrices();
+                } else {
+                    showStatus(result.error || 'Error al actualizar precio', 'error');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showStatus('Error de conexión', 'error');
+            }
+        }
+
+        // Función para cargar estadísticas
+        async function loadStats() {
+            try {
+                const response = await fetch('/api/estadisticas');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const stats = await response.json();
+
+                document.getElementById('totalHoy').textContent = `${stats.hoy.total.toFixed(2)}`;
+                document.getElementById('generalHoy').textContent = stats.general.cantidad;
+                document.getElementById('vipHoy').textContent = stats.vip.cantidad;
+                document.getElementById('totalGeneral').textContent = `${stats.total.total.toFixed(2)}`;
+
+            } catch (error) {
+                console.error('Error al cargar estadísticas:', error);
+                // Mostrar valores por defecto en caso de error
+                document.getElementById('totalHoy').textContent = '$0.00';
+                document.getElementById('generalHoy').textContent = '0';
+                document.getElementById('vipHoy').textContent = '0';
+                document.getElementById('totalGeneral').textContent = '$0.00';
+            }
+        }
+
+        // Función de inicialización
+        async function initApp() {
+            try {
+                await Promise.all([
+                    loadPrices(),
+                    loadGallery(),
+                    loadStats()
+                ]);
+            } catch (error) {
+                console.error('Error al inicializar la aplicación:', error);
+                showStatus('Error al cargar datos iniciales', 'error');
+            }
+        }
+
+        // Event listeners para teclas
+        document.addEventListener('keydown', function(e) {
+            // ESC para cancelar
+            if (e.key === 'Escape' && !document.getElementById('photoPreview').classList.contains('hidden')) {
+                cancelPhoto();
+            }
+            
+            // Enter para subir foto si está en preview
+            if (e.key === 'Enter' && !document.getElementById('photoPreview').classList.contains('hidden')) {
+                uploadPhoto();
+            }
+        });
+
+        // Actualizar estadísticas cada 30 segundos
+        setInterval(loadStats, 30000);
+
+        // Inicializar la aplicación cuando cargue la página
+        document.addEventListener('DOMContentLoaded', initApp);
+
+        // Manejar errores de la ventana
+        window.addEventListener('error', function(e) {
+            console.error('Error global:', e.error);
+        });
+
+        // Manejar errores de promesas no capturadas
+        window.addEventListener('unhandledrejection', function(e) {
+            console.error('Promesa rechazada:', e.reason);
+        });
+    </script>
+</body>
+</html>
