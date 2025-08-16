@@ -523,6 +523,95 @@ app.get('/api/health', (req, res) => {
     res.json(health);
 });
 
+// Ruta para obtener estadísticas de la base de datos
+app.get('/api/database-stats', (req, res) => {
+    console.log('📊 Obteniendo estadísticas de la base de datos...');
+    
+    // Obtener estadísticas de la base de datos
+    const stats = {};
+    
+    // Contar total de fotos
+    db.get('SELECT COUNT(*) as total_photos FROM fotos_entradas', (err, photoCount) => {
+        if (err) {
+            console.error('❌ Error obteniendo conteo de fotos:', err);
+            return res.status(500).json({ error: 'Error al obtener estadísticas' });
+        }
+        
+        stats.total_photos = photoCount.total_photos;
+        
+        // Obtener tamaño total de archivos (aproximado por nombre de archivo)
+        db.all('SELECT filename, local_path FROM fotos_entradas', (err, files) => {
+            if (err) {
+                console.error('❌ Error obteniendo archivos:', err);
+                return res.status(500).json({ error: 'Error al obtener estadísticas' });
+            }
+            
+            let totalSize = 0;
+            let checkedFiles = 0;
+            
+            if (files.length === 0) {
+                return res.json({
+                    total_photos: stats.total_photos,
+                    total_size_mb: 0,
+                    average_size_kb: 0,
+                    database_size_mb: 0,
+                    storage_location: fs.existsSync(PHOTOS_DIR) ? PHOTOS_DIR : 'uploads/',
+                    photos_today: 0
+                });
+            }
+            
+            files.forEach((file, index) => {
+                if (file.local_path && fs.existsSync(file.local_path)) {
+                    try {
+                        const fileStats = fs.statSync(file.local_path);
+                        totalSize += fileStats.size;
+                    } catch (error) {
+                        console.warn('⚠️ No se puede leer archivo:', file.local_path);
+                    }
+                }
+                
+                checkedFiles++;
+                
+                // Cuando se hayan verificado todos los archivos
+                if (checkedFiles === files.length) {
+                    // Obtener tamaño de la base de datos
+                    let dbSize = 0;
+                    try {
+                        const dbStats = fs.statSync(dbPath);
+                        dbSize = dbStats.size;
+                    } catch (error) {
+                        console.warn('⚠️ No se puede obtener tamaño de BD');
+                    }
+                    
+                    // Contar fotos de hoy
+                    const today = new Date().toISOString().split('T')[0];
+                    db.get(
+                        'SELECT COUNT(*) as photos_today FROM fotos_entradas WHERE date(timestamp) = ?',
+                        [today],
+                        (err, todayCount) => {
+                            if (err) {
+                                console.error('❌ Error contando fotos de hoy:', err);
+                            }
+                            
+                            const finalStats = {
+                                total_photos: stats.total_photos,
+                                total_size_mb: (totalSize / (1024 * 1024)).toFixed(2),
+                                average_size_kb: stats.total_photos > 0 ? (totalSize / 1024 / stats.total_photos).toFixed(2) : 0,
+                                database_size_mb: (dbSize / (1024 * 1024)).toFixed(2),
+                                storage_location: fs.existsSync(PHOTOS_DIR) ? PHOTOS_DIR : 'uploads/',
+                                photos_today: todayCount ? todayCount.photos_today : 0
+                            };
+                            
+                            console.log('✅ Estadísticas de BD:', finalStats);
+                            res.json(finalStats);
+                        }
+                    );
+                }
+            });
+        });
+    });
+});
+
 // Ruta de configuración (para debug)
 app.get('/api/config', (req, res) => {
     res.json({

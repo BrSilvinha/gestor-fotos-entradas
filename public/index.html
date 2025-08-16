@@ -433,6 +433,50 @@
             </div>
         </div>
 
+        <!-- Estadísticas de Base de Datos -->
+        <div class="card shadow-lg mb-4">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <h3 class="card-title mb-0">💾 Estado del Almacenamiento</h3>
+                    <button class="btn btn-outline-secondary btn-sm rounded-pill" onclick="loadDatabaseStats()" title="Actualizar estadísticas">
+                        <i class="bi bi-arrow-clockwise"></i> Actualizar
+                    </button>
+                </div>
+                <div class="row" id="databaseStats">
+                    <div class="col-md-3 col-6 mb-3">
+                        <div class="text-center p-3 bg-light rounded">
+                            <div class="h4 mb-1 text-primary" id="totalPhotosDB">-</div>
+                            <small class="text-muted">Total Fotos</small>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-6 mb-3">
+                        <div class="text-center p-3 bg-light rounded">
+                            <div class="h4 mb-1 text-success" id="totalSizeMB">-</div>
+                            <small class="text-muted">Espacio Usado</small>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-6 mb-3">
+                        <div class="text-center p-3 bg-light rounded">
+                            <div class="h4 mb-1 text-info" id="averageSizeKB">-</div>
+                            <small class="text-muted">Tamaño Promedio</small>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-6 mb-3">
+                        <div class="text-center p-3 bg-light rounded">
+                            <div class="h4 mb-1 text-warning" id="photosToday">-</div>
+                            <small class="text-muted">Fotos Hoy</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <small class="text-muted">
+                        <i class="bi bi-folder"></i> Ubicación: <span id="storageLocation">-</span> | 
+                        <i class="bi bi-database"></i> BD: <span id="databaseSizeMB">-</span>
+                    </small>
+                </div>
+            </div>
+        </div>
+
         <!-- Galería de Fotos -->
         <div class="card shadow-lg mb-4">
             <div class="card-body">
@@ -619,9 +663,13 @@
                     await uploadPendingPhoto(oldFile, oldType);
                 }
 
-                // Asignar nueva foto como pendiente
-                pendingFile = file;
-                selectedFile = file;
+                // Comprimir imagen automáticamente
+                showStatus('🗜️ Comprimiendo imagen...', 'info');
+                const compressedFile = await compressImage(file);
+
+                // Asignar nueva foto comprimida como pendiente
+                pendingFile = compressedFile;
+                selectedFile = compressedFile;
                 
                 // Verificar si está activado el modo automático
                 const autoMode = document.getElementById('autoUploadMode').checked;
@@ -652,6 +700,62 @@
         function resetButtons() {
             document.getElementById('btnGeneral').style.opacity = '1';
             document.getElementById('btnVip').style.opacity = '1';
+        }
+
+        // Función para comprimir imagen automáticamente
+        function compressImage(file, maxWidth = 1200, maxHeight = 900, quality = 0.8) {
+            return new Promise((resolve) => {
+                console.log('🗜️ Comprimiendo imagen...', { 
+                    original: file.name, 
+                    size: (file.size / 1024).toFixed(2) + 'KB' 
+                });
+
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                const img = new Image();
+
+                img.onload = function() {
+                    // Calcular nuevas dimensiones manteniendo proporción
+                    let { width, height } = img;
+                    
+                    if (width > height) {
+                        if (width > maxWidth) {
+                            height = (height * maxWidth) / width;
+                            width = maxWidth;
+                        }
+                    } else {
+                        if (height > maxHeight) {
+                            width = (width * maxHeight) / height;
+                            height = maxHeight;
+                        }
+                    }
+
+                    canvas.width = width;
+                    canvas.height = height;
+
+                    // Dibujar imagen redimensionada
+                    ctx.drawImage(img, 0, 0, width, height);
+
+                    // Convertir a blob comprimido
+                    canvas.toBlob((compressedBlob) => {
+                        const compressedFile = new File([compressedBlob], file.name, {
+                            type: 'image/jpeg',
+                            lastModified: Date.now()
+                        });
+
+                        const compressionRatio = ((file.size - compressedFile.size) / file.size * 100).toFixed(1);
+                        console.log('✅ Imagen comprimida:', {
+                            original: (file.size / 1024).toFixed(2) + 'KB',
+                            compressed: (compressedFile.size / 1024).toFixed(2) + 'KB',
+                            saved: compressionRatio + '%'
+                        });
+
+                        resolve(compressedFile);
+                    }, 'image/jpeg', quality);
+                };
+
+                img.src = URL.createObjectURL(file);
+            });
         }
 
         // Función para preparar la siguiente foto en modo automático
@@ -688,7 +792,7 @@
                 if (result.success) {
                     console.log('✅ Foto pendiente subida:', result.message);
                     showStatus(`✅ Foto anterior subida: ${result.message}`, 'success');
-                    await Promise.all([loadGallery(), loadStats()]);
+                    await Promise.all([loadGallery(), loadStats(), loadDatabaseStats()]);
                 } else {
                     console.error('❌ Error subiendo foto pendiente:', result.error);
                     showStatus(`❌ Error subiendo foto anterior: ${result.error}`, 'error');
@@ -765,7 +869,7 @@
                         cancelPhoto();
                     }
                     
-                    await Promise.all([loadGallery(), loadStats()]);
+                    await Promise.all([loadGallery(), loadStats(), loadDatabaseStats()]);
                 } else {
                     showStatus(result.error || 'Error al subir la foto', 'error');
                 }
@@ -1014,7 +1118,7 @@
                 if (result.success) {
                     showStatus(`✅ ${result.message}`, 'success');
                     console.log('✅ Todas las fotos eliminadas correctamente');
-                    await Promise.all([loadGallery(), loadStats()]);
+                    await Promise.all([loadGallery(), loadStats(), loadDatabaseStats()]);
                 } else {
                     showStatus(result.error || 'Error al eliminar las fotos', 'error');
                     console.log('❌ Error al eliminar:', result.error);
@@ -1055,6 +1159,52 @@
             }
         }
 
+        // Función para cargar estadísticas de la base de datos
+        async function loadDatabaseStats() {
+            console.log('💾 Cargando estadísticas de base de datos...');
+            
+            try {
+                const response = await fetch('/api/database-stats');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const dbStats = await response.json();
+                console.log('💾 Estadísticas de BD obtenidas:', dbStats);
+
+                // Actualizar elementos del DOM
+                document.getElementById('totalPhotosDB').textContent = dbStats.total_photos || '0';
+                document.getElementById('totalSizeMB').textContent = `${dbStats.total_size_mb} MB`;
+                document.getElementById('averageSizeKB').textContent = `${dbStats.average_size_kb} KB`;
+                document.getElementById('photosToday').textContent = dbStats.photos_today || '0';
+                document.getElementById('storageLocation').textContent = dbStats.storage_location || 'No definido';
+                document.getElementById('databaseSizeMB').textContent = `${dbStats.database_size_mb} MB`;
+
+                // Cambiar color si el espacio usado es alto
+                const totalSizeMB = parseFloat(dbStats.total_size_mb);
+                const sizeElement = document.getElementById('totalSizeMB');
+                
+                if (totalSizeMB > 1000) { // Más de 1GB
+                    sizeElement.className = 'h4 mb-1 text-danger';
+                } else if (totalSizeMB > 500) { // Más de 500MB
+                    sizeElement.className = 'h4 mb-1 text-warning';
+                } else {
+                    sizeElement.className = 'h4 mb-1 text-success';
+                }
+
+            } catch (error) {
+                console.error('❌ Error al cargar estadísticas de BD:', error);
+                // Mostrar valores por defecto en caso de error
+                document.getElementById('totalPhotosDB').textContent = 'Error';
+                document.getElementById('totalSizeMB').textContent = 'Error';
+                document.getElementById('averageSizeKB').textContent = 'Error';
+                document.getElementById('photosToday').textContent = 'Error';
+                document.getElementById('storageLocation').textContent = 'Error';
+                document.getElementById('databaseSizeMB').textContent = 'Error';
+            }
+        }
+
         // Función de inicialización
         async function initApp() {
             console.log('🚀 Inicializando aplicación...');
@@ -1065,7 +1215,8 @@
                 await Promise.all([
                     loadPrices(),
                     loadGallery(),
-                    loadStats()
+                    loadStats(),
+                    loadDatabaseStats()
                 ]);
                 
                 console.log('✅ Aplicación inicializada correctamente');
