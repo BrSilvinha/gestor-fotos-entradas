@@ -22,7 +22,39 @@ if (!process.env.CLOUDINARY_API_SECRET) {
 }
 
 // Configuración de multer para memoria (no disco)
-const storage = multer.memoryStorage();
+// Directorio local para guardar fotos
+const PHOTOS_DIR = 'Z:\\Foto bailes';
+
+// Crear directorio si no existe
+if (!fs.existsSync(PHOTOS_DIR)) {
+    try {
+        fs.mkdirSync(PHOTOS_DIR, { recursive: true });
+        console.log('📁 Directorio creado:', PHOTOS_DIR);
+    } catch (error) {
+        console.error('❌ Error creando directorio:', error);
+        console.log('⚠️ Usando directorio local como fallback');
+        const fallbackDir = path.join(__dirname, 'uploads');
+        if (!fs.existsSync(fallbackDir)) {
+            fs.mkdirSync(fallbackDir, { recursive: true });
+        }
+    }
+}
+
+// Configuración de multer para guardar archivos localmente
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        // Intentar usar Z:\Foto bailes, si falla usar directorio local
+        const targetDir = fs.existsSync(PHOTOS_DIR) ? PHOTOS_DIR : path.join(__dirname, 'uploads');
+        cb(null, targetDir);
+    },
+    filename: function (req, file, cb) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const tipo = req.body.tipo || 'general';
+        const extension = path.extname(file.originalname);
+        const filename = `${tipo}_${timestamp}${extension}`;
+        cb(null, filename);
+    }
+});
 
 const upload = multer({ 
     storage: storage,
@@ -47,8 +79,9 @@ db.serialize(() => {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         tipo TEXT NOT NULL,
         filename TEXT NOT NULL,
-        cloudinary_url TEXT NOT NULL,
-        public_id TEXT NOT NULL,
+        local_path TEXT NOT NULL,
+        cloudinary_url TEXT,
+        public_id TEXT,
         precio DECIMAL(10,2) NOT NULL,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
@@ -112,6 +145,36 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// Ruta para servir fotos locales
+app.get('/api/image/:filename', (req, res) => {
+    const filename = req.params.filename;
+    console.log('🖼️ Solicitando imagen:', filename);
+    
+    // Buscar la foto en la base de datos para obtener la ruta completa
+    db.get('SELECT local_path FROM fotos_entradas WHERE filename = ?', [filename], (err, row) => {
+        if (err) {
+            console.error('❌ Error buscando imagen:', err);
+            return res.status(500).json({ error: 'Error interno' });
+        }
+        
+        if (!row) {
+            console.log('❌ Imagen no encontrada:', filename);
+            return res.status(404).json({ error: 'Imagen no encontrada' });
+        }
+        
+        const imagePath = row.local_path;
+        
+        // Verificar que el archivo existe
+        if (!fs.existsSync(imagePath)) {
+            console.log('❌ Archivo físico no encontrado:', imagePath);
+            return res.status(404).json({ error: 'Archivo no encontrado' });
+        }
+        
+        console.log('✅ Sirviendo imagen desde:', imagePath);
+        res.sendFile(path.resolve(imagePath));
+    });
+});
+
 // Ruta para subir fotos
 app.post('/api/upload', upload.single('photo'), async (req, res) => {
     console.log('📤 Recibiendo upload request...');
@@ -130,12 +193,6 @@ app.post('/api/upload', upload.single('photo'), async (req, res) => {
     }
 
     try {
-        // Verificar configuración de Cloudinary
-        if (!process.env.CLOUDINARY_API_SECRET) {
-            console.log('❌ Cloudinary no configurado');
-            return res.status(500).json({ error: 'Servicio de imágenes no configurado' });
-        }
-
         // Obtener precio actual del tipo de entrada
         console.log('💰 Obteniendo precio para tipo:', tipo);
         const precio = await new Promise((resolve, reject) => {
@@ -151,42 +208,59 @@ app.post('/api/upload', upload.single('photo'), async (req, res) => {
             });
         });
 
-        // Subir a Cloudinary
-        console.log('☁️ Subiendo imagen a Cloudinary...');
-        const timestamp = Date.now();
-        const result = await new Promise((resolve, reject) => {
-            cloudinary.uploader.upload_stream(
-                {
-                    folder: 'entradas',
-                    public_id: `${tipo}_${timestamp}`,
-                    resource_type: 'image',
-                    transformation: [
-                        { width: 1200, height: 900, crop: "limit" },
-                        { quality: "auto:good" },
-                        { format: "auto" }
-                    ]
-                },
-                (error, result) => {
-                    if (error) {
-                        console.error('❌ Error Cloudinary:', error);
-                        reject(error);
-                    } else {
-                        console.log('✅ Imagen subida a Cloudinary:', result.secure_url);
-                        resolve(result);
-                    }
-                }
-            ).end(req.file.buffer);
-        });
+        console.log('📁 Foto guardada localmente en:', req.file.path);
+        
+        let cloudinaryUrl = null;
+        let publicId = null;
 
-        // Guardar en base de datos
+        // Intentar subir a Cloudinary como respaldo (opcional)
+        if (process.env.CLOUDINARY_API_SECRET) {
+            try {
+                console.log('☁️ Subiendo imagen a Cloudinary como respaldo...');
+                const timestamp = Date.now();
+                const cloudinaryResult = await new Promise((resolve, reject) => {
+                    cloudinary.uploader.upload(
+                        req.file.path,
+                        {
+                            folder: 'entradas',
+                            public_id: `${tipo}_${timestamp}`,
+                            resource_type: 'image',
+                            transformation: [
+                                { width: 1200, height: 900, crop: "limit" },
+                                { quality: "auto:good" },
+                                { format: "auto" }
+                            ]
+                        },
+                        (error, result) => {
+                            if (error) {
+                                console.warn('⚠️ Error en Cloudinary (continuando con archivo local):', error.message);
+                                resolve(null);
+                            } else {
+                                console.log('✅ Imagen respaldada en Cloudinary:', result.secure_url);
+                                resolve(result);
+                            }
+                        }
+                    );
+                });
+                
+                if (cloudinaryResult) {
+                    cloudinaryUrl = cloudinaryResult.secure_url;
+                    publicId = cloudinaryResult.public_id;
+                }
+            } catch (error) {
+                console.warn('⚠️ Error con Cloudinary, usando solo archivo local:', error.message);
+            }
+        }
+
+        // Guardar información en base de datos
         console.log('💾 Guardando en base de datos...');
         const dbResult = await new Promise((resolve, reject) => {
             db.run(
-                'INSERT INTO fotos_entradas (tipo, filename, cloudinary_url, public_id, precio) VALUES (?, ?, ?, ?, ?)',
-                [tipo, `${tipo}_${timestamp}`, result.secure_url, result.public_id, precio],
+                'INSERT INTO fotos_entradas (tipo, filename, local_path, cloudinary_url, public_id, precio) VALUES (?, ?, ?, ?, ?, ?)',
+                [tipo, req.file.filename, req.file.path, cloudinaryUrl, publicId, precio],
                 function(err) {
                     if (err) {
-                        console.error('❌ Error BD:', err);
+                        console.error('❌ Error guardando en BD:', err);
                         reject(err);
                     } else {
                         console.log('✅ Guardado en BD con ID:', this.lastID);
@@ -200,11 +274,12 @@ app.post('/api/upload', upload.single('photo'), async (req, res) => {
         res.json({
             success: true,
             id: dbResult.id,
-            filename: `${tipo}_${timestamp}`,
-            cloudinary_url: result.secure_url,
+            filename: req.file.filename,
+            local_path: req.file.path,
+            cloudinary_url: cloudinaryUrl,
             tipo: tipo,
             precio: precio,
-            message: `Foto ${tipo} guardada - $${precio}`
+            message: `Foto ${tipo} guardada localmente - $${precio}`
         });
 
     } catch (error) {
@@ -233,8 +308,16 @@ app.get('/api/photos', (req, res) => {
                 return res.status(500).json({ error: 'Error al obtener fotos' });
             }
             
-            console.log('✅ Fotos obtenidas:', rows.length);
-            res.json(rows);
+            // Modificar las URLs para que apunten al servidor local
+            const photosWithLocalUrls = rows.map(photo => ({
+                ...photo,
+                // Usar URL local como principal, Cloudinary como fallback
+                cloudinary_url: `/api/image/${photo.filename}`,
+                cloudinary_backup: photo.cloudinary_url // Mantener URL original como respaldo
+            }));
+            
+            console.log('✅ Fotos obtenidas:', photosWithLocalUrls.length);
+            res.json(photosWithLocalUrls);
         }
     );
 });

@@ -194,6 +194,77 @@
             border: 1px solid #f5c6cb;
         }
 
+        /* Estilos para pantalla de login */
+        .login-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+
+        .login-card {
+            background: white;
+            padding: 2rem;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+
+        .login-title {
+            color: #495057;
+            margin-bottom: 1.5rem;
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+
+        .login-input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 1rem;
+            margin-bottom: 1rem;
+            text-align: center;
+            letter-spacing: 2px;
+        }
+
+        .login-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+        }
+
+        .login-btn {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s;
+            width: 100%;
+        }
+
+        .login-btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .login-error {
+            color: #dc3545;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+        }
+
         @media (max-width: 768px) {
             .photo-buttons {
                 grid-template-columns: 1fr;
@@ -221,6 +292,27 @@
     </style>
 </head>
 <body>
+    <!-- Pantalla de Login -->
+    <div class="login-overlay" id="loginOverlay">
+        <div class="login-card">
+            <div class="login-title">
+                🔐 Acceso al Sistema
+            </div>
+            <p class="text-muted mb-4">Ingresa la contraseña para continuar</p>
+            <div>
+                <input type="password" 
+                       class="login-input" 
+                       id="loginPassword" 
+                       placeholder="Contraseña" 
+                       maxlength="8">
+                <button class="login-btn" onclick="checkLogin()">
+                    <i class="bi bi-unlock"></i> Ingresar
+                </button>
+                <div id="loginError" class="login-error"></div>
+            </div>
+        </div>
+    </div>
+
     <div class="connection-status alert hidden rounded-pill px-3 py-2" id="connectionStatus">
         🔗 Conectado
     </div>
@@ -373,6 +465,83 @@
         let pendingFile = null; // Archivo pendiente de subir
         let currentPrices = { general: 50, vip: 100 };
         let isOnline = navigator.onLine;
+        let isAuthenticated = false;
+
+        // Sistema de autenticación
+        const REQUIRED_PASSWORD = '17577855';
+        const SESSION_KEY = 'photo_system_auth';
+
+        // Verificar autenticación al cargar la página
+        function checkAuthOnLoad() {
+            const sessionAuth = sessionStorage.getItem(SESSION_KEY);
+            if (sessionAuth === 'authenticated') {
+                isAuthenticated = true;
+                hideLogin();
+                initApp();
+            } else {
+                showLogin();
+            }
+        }
+
+        // Mostrar pantalla de login
+        function showLogin() {
+            document.getElementById('loginOverlay').style.display = 'flex';
+            document.getElementById('loginPassword').focus();
+        }
+
+        // Ocultar pantalla de login
+        function hideLogin() {
+            document.getElementById('loginOverlay').style.display = 'none';
+        }
+
+        // Verificar login
+        function checkLogin() {
+            const password = document.getElementById('loginPassword').value;
+            const errorDiv = document.getElementById('loginError');
+
+            if (password === REQUIRED_PASSWORD) {
+                // Autenticación exitosa
+                isAuthenticated = true;
+                sessionStorage.setItem(SESSION_KEY, 'authenticated');
+                errorDiv.textContent = '';
+                hideLogin();
+                initApp();
+                console.log('✅ Usuario autenticado correctamente');
+            } else {
+                // Contraseña incorrecta
+                errorDiv.textContent = '❌ Contraseña incorrecta';
+                document.getElementById('loginPassword').value = '';
+                document.getElementById('loginPassword').focus();
+                console.log('❌ Intento de login fallido');
+            }
+        }
+
+        // Cerrar sesión (opcional - para testing)
+        function logout() {
+            isAuthenticated = false;
+            sessionStorage.removeItem(SESSION_KEY);
+            showLogin();
+            console.log('🚪 Sesión cerrada');
+        }
+
+        // Event listener para Enter en el campo de contraseña
+        document.addEventListener('DOMContentLoaded', function() {
+            const passwordInput = document.getElementById('loginPassword');
+            passwordInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    checkLogin();
+                }
+            });
+        });
+
+        // Middleware para verificar autenticación en acciones importantes
+        function requireAuth(callback) {
+            if (!isAuthenticated) {
+                showLogin();
+                return false;
+            }
+            return callback();
+        }
 
         // Detectar estado de conexión
         window.addEventListener('online', () => {
@@ -402,19 +571,21 @@
 
         // Función para seleccionar tipo de foto
         function selectPhotoType(type) {
-            if (!isOnline) {
-                showStatus('Sin conexión a internet', 'error');
-                return;
-            }
+            return requireAuth(() => {
+                if (!isOnline) {
+                    showStatus('Sin conexión a internet', 'error');
+                    return;
+                }
 
-            selectedType = type;
-            console.log('📸 Seleccionado tipo:', type);
-            
-            // Actualizar botones para mostrar el tipo seleccionado
-            document.getElementById('btnGeneral').style.opacity = type === 'general' ? '1' : '0.7';
-            document.getElementById('btnVip').style.opacity = type === 'vip' ? '1' : '0.7';
-            
-            document.getElementById('photoInput').click();
+                selectedType = type;
+                console.log('📸 Seleccionado tipo:', type);
+                
+                // Actualizar botones para mostrar el tipo seleccionado
+                document.getElementById('btnGeneral').style.opacity = type === 'general' ? '1' : '0.7';
+                document.getElementById('btnVip').style.opacity = type === 'vip' ? '1' : '0.7';
+                
+                document.getElementById('photoInput').click();
+            });
         }
 
         // Event listener para el input de archivos
@@ -766,15 +937,16 @@
 
         // Función para actualizar precios
         async function updatePrice(tipo) {
-            console.log('💰 Actualizando precio:', tipo);
-            
-            const inputId = tipo === 'general' ? 'precioGeneral' : 'precioVip';
-            const precio = document.getElementById(inputId).value;
+            return requireAuth(async () => {
+                console.log('💰 Actualizando precio:', tipo);
+                
+                const inputId = tipo === 'general' ? 'precioGeneral' : 'precioVip';
+                const precio = document.getElementById(inputId).value;
 
-            if (!precio || precio < 0) {
-                showStatus('Por favor ingresa un precio válido', 'error');
-                return;
-            }
+                if (!precio || precio < 0) {
+                    showStatus('Por favor ingresa un precio válido', 'error');
+                    return;
+                }
 
             try {
                 const response = await fetch(`/api/precios/${tipo}`, {
@@ -797,14 +969,16 @@
                 console.error('❌ Error:', error);
                 showStatus('Error de conexión', 'error');
             }
+            });
         }
 
         // Función para eliminar todas las fotos
         async function deleteAllPhotos() {
-            console.log('🗑️ Iniciando eliminación de todas las fotos...');
-            
-            // Pedir contraseña
-            const password = prompt('⚠️ ATENCIÓN: Esta acción eliminará TODAS las fotos.\n\nIngresa la contraseña para confirmar:');
+            return requireAuth(async () => {
+                console.log('🗑️ Iniciando eliminación de todas las fotos...');
+                
+                // Pedir contraseña
+                const password = prompt('⚠️ ATENCIÓN: Esta acción eliminará TODAS las fotos.\n\nIngresa la contraseña para confirmar:');
             
             if (!password) {
                 console.log('❌ Eliminación cancelada - sin contraseña');
@@ -849,6 +1023,7 @@
                 console.error('💥 Error en eliminación:', error);
                 showStatus('Error de conexión al eliminar fotos', 'error');
             }
+            });
         }
 
         // Función para cargar estadísticas
@@ -921,7 +1096,7 @@
         }, 30000);
 
         // Inicializar la aplicación cuando cargue la página
-        document.addEventListener('DOMContentLoaded', initApp);
+        document.addEventListener('DOMContentLoaded', checkAuthOnLoad);
 
         // Manejar errores de la ventana
         window.addEventListener('error', function(e) {
