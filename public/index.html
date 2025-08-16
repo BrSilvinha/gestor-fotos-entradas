@@ -288,6 +288,18 @@
         <div class="card shadow-lg mb-4">
             <div class="card-body">
                 <h3 class="card-title mb-4">📷 Tomar Fotos</h3>
+                <!-- Configuración de modo -->
+                <div class="row mb-3">
+                    <div class="col-12">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="autoUploadMode">
+                            <label class="form-check-label fw-semibold" for="autoUploadMode">
+                                <i class="bi bi-lightning-charge"></i> Subida automática (sin confirmación)
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="photo-buttons">
                     <button class="photo-btn btn-general" onclick="selectPhotoType('general')" id="btnGeneral">
                         🎫 Tomar Foto General
@@ -414,17 +426,28 @@
                 }
 
                 selectedFile = file;
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    document.getElementById('previewImg').src = e.target.result;
-                    document.getElementById('photoPreview').classList.remove('hidden');
-                    console.log('🖼️ Imagen cargada para preview');
+                
+                // Verificar si está activado el modo automático
+                const autoMode = document.getElementById('autoUploadMode').checked;
+                
+                if (autoMode) {
+                    // Subida automática - sin preview
+                    console.log('⚡ Modo automático activado - subiendo inmediatamente...');
+                    uploadPhoto();
+                } else {
+                    // Modo normal - mostrar preview
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        document.getElementById('previewImg').src = e.target.result;
+                        document.getElementById('photoPreview').classList.remove('hidden');
+                        console.log('🖼️ Imagen cargada para preview');
+                    }
+                    reader.onerror = function() {
+                        showStatus('Error al cargar la imagen', 'error');
+                        resetButtons();
+                    }
+                    reader.readAsDataURL(file);
                 }
-                reader.onerror = function() {
-                    showStatus('Error al cargar la imagen', 'error');
-                    resetButtons();
-                }
-                reader.readAsDataURL(file);
             } else {
                 resetButtons();
             }
@@ -433,6 +456,14 @@
         function resetButtons() {
             document.getElementById('btnGeneral').style.opacity = '1';
             document.getElementById('btnVip').style.opacity = '1';
+        }
+
+        // Función para preparar la siguiente foto en modo automático
+        function resetForNextPhoto() {
+            selectedFile = null;
+            document.getElementById('photoInput').value = '';
+            // Mantener el tipo seleccionado para facilitar múltiples fotos del mismo tipo
+            console.log('🔄 Lista para siguiente foto del tipo:', selectedType);
         }
 
         // Función para cancelar la foto
@@ -490,8 +521,16 @@
                 console.log('✅ Resultado:', result);
 
                 if (result.success) {
-                    showStatus(result.message, 'success');
-                    cancelPhoto();
+                    const autoMode = document.getElementById('autoUploadMode').checked;
+                    
+                    if (autoMode) {
+                        showStatus(`✅ ${result.message} - Lista para siguiente foto`, 'success');
+                        resetForNextPhoto();
+                    } else {
+                        showStatus(result.message, 'success');
+                        cancelPhoto();
+                    }
+                    
                     await Promise.all([loadGallery(), loadStats()]);
                 } else {
                     showStatus(result.error || 'Error al subir la foto', 'error');
