@@ -395,6 +395,36 @@ app.delete('/api/photos/:id', async (req, res) => {
     }
 });
 
+// Ruta para eliminar todas las fotos
+app.delete('/api/delete-all', (req, res) => {
+    console.log('🗑️ Solicitud de eliminación de todas las fotos...');
+    
+    const { password } = req.body;
+    
+    // Validar contraseña
+    if (!password || password !== '71749437') {
+        console.log('❌ Contraseña incorrecta en eliminación');
+        return res.status(401).json({ error: 'Contraseña incorrecta' });
+    }
+    
+    console.log('✅ Contraseña validada, procediendo a eliminar todas las fotos...');
+    
+    db.run('DELETE FROM fotos_entradas', function(err) {
+        if (err) {
+            console.error('❌ Error eliminando fotos:', err);
+            return res.status(500).json({ error: 'Error al eliminar las fotos' });
+        }
+        
+        console.log('✅ Todas las fotos eliminadas de la base de datos. Filas afectadas:', this.changes);
+        
+        res.json({
+            success: true,
+            message: `Se eliminaron ${this.changes} fotos correctamente`,
+            deleted_count: this.changes
+        });
+    });
+});
+
 // Ruta de salud del servidor
 app.get('/api/health', (req, res) => {
     const health = {

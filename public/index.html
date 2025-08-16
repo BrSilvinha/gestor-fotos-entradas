@@ -340,9 +340,14 @@
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-4">
                     <h3 class="card-title mb-0">📷 Fotos Guardadas</h3>
-                    <button class="btn btn-secondary btn-sm rounded-pill" onclick="loadGallery()" title="Actualizar galería">
-                        <i class="bi bi-arrow-clockwise"></i> Actualizar
-                    </button>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-secondary btn-sm rounded-pill" onclick="loadGallery()" title="Actualizar galería">
+                            <i class="bi bi-arrow-clockwise"></i> Actualizar
+                        </button>
+                        <button class="btn btn-danger btn-sm rounded-pill" onclick="deleteAllPhotos()" title="Eliminar todas las fotos">
+                            <i class="bi bi-trash3"></i> Eliminar Todas
+                        </button>
+                    </div>
                 </div>
                 <div id="gallery" class="gallery">
                     <div style="text-align: center; color: #666; grid-column: 1/-1;">
@@ -733,6 +738,58 @@
             } catch (error) {
                 console.error('❌ Error:', error);
                 showStatus('Error de conexión', 'error');
+            }
+        }
+
+        // Función para eliminar todas las fotos
+        async function deleteAllPhotos() {
+            console.log('🗑️ Iniciando eliminación de todas las fotos...');
+            
+            // Pedir contraseña
+            const password = prompt('⚠️ ATENCIÓN: Esta acción eliminará TODAS las fotos.\n\nIngresa la contraseña para confirmar:');
+            
+            if (!password) {
+                console.log('❌ Eliminación cancelada - sin contraseña');
+                return;
+            }
+
+            if (password !== '71749437') {
+                showStatus('❌ Contraseña incorrecta', 'error');
+                console.log('❌ Contraseña incorrecta');
+                return;
+            }
+
+            // Confirmación adicional
+            const confirm = window.confirm('¿Estás SEGURO de que quieres eliminar TODAS las fotos?\n\nEsta acción NO se puede deshacer.');
+            
+            if (!confirm) {
+                console.log('❌ Eliminación cancelada por el usuario');
+                return;
+            }
+
+            try {
+                console.log('🚀 Enviando solicitud de eliminación...');
+                const response = await fetch('/api/delete-all', {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ password: password })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showStatus(`✅ ${result.message}`, 'success');
+                    console.log('✅ Todas las fotos eliminadas correctamente');
+                    await Promise.all([loadGallery(), loadStats()]);
+                } else {
+                    showStatus(result.error || 'Error al eliminar las fotos', 'error');
+                    console.log('❌ Error al eliminar:', result.error);
+                }
+            } catch (error) {
+                console.error('💥 Error en eliminación:', error);
+                showStatus('Error de conexión al eliminar fotos', 'error');
             }
         }
 
