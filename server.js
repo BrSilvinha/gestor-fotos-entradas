@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const sqlite3 = require('sqlite3').verbose();
@@ -8,12 +9,17 @@ const cloudinary = require('cloudinary').v2;
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Configurar Cloudinary
+// Configurar Cloudinary con tus credenciales
 cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'detmqufi2',
+    api_key: process.env.CLOUDINARY_API_KEY || '341624499929153',
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
+
+// Verificar configuración de Cloudinary
+if (!process.env.CLOUDINARY_API_SECRET) {
+    console.warn('⚠️  CLOUDINARY_API_SECRET no está configurado');
+}
 
 // Configuración de multer para memoria (no disco)
 const storage = multer.memoryStorage();
@@ -31,7 +37,8 @@ const upload = multer({
 });
 
 // Configurar base de datos SQLite
-const db = new sqlite3.Database('entradas.db');
+const dbPath = process.env.NODE_ENV === 'production' ? '/tmp/entradas.db' : 'entradas.db';
+const db = new sqlite3.Database(dbPath);
 
 // Crear tablas si no existen
 db.serialize(() => {
@@ -57,12 +64,31 @@ db.serialize(() => {
     // Insertar precios por defecto
     db.run(`INSERT OR IGNORE INTO precios_entradas (tipo, precio) VALUES 
         ('general', 50.00),
-        ('vip', 100.00)`);
+        ('vip', 100.00)`, function(err) {
+        if (err) {
+            console.error('Error insertando precios por defecto:', err);
+        } else {
+            console.log('✅ Base de datos inicializada correctamente');
+        }
+    });
 });
 
 // Middleware
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(express.static('public'));
+
+// Middleware de CORS para desarrollo
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    if (req.method === 'OPTIONS') {
+        res.sendStatus(200);
+    } else {
+        next();
+    }
+});
 
 // Middleware de manejo de errores
 app.use((err, req, res, next) => {
@@ -70,8 +96,14 @@ app.use((err, req, res, next) => {
         if (err.code === 'LIMIT_FILE_SIZE') {
             return res.status(400).json({ error: 'Archivo muy grande. Máximo 10MB.' });
         }
+        return res.status(400).json({ error: 'Error en el archivo: ' + err.message });
     }
-    console.error(err);
+    
+    if (err.message === 'Solo se permiten archivos de imagen') {
+        return res.status(400).json({ error: err.message });
+    }
+    
+    console.error('Error no manejado:', err);
     res.status(500).json({ error: 'Error interno del servidor' });
 });
 
@@ -82,25 +114,45 @@ app.get('/', (req, res) => {
 
 // Ruta para subir fotos
 app.post('/api/upload', upload.single('photo'), async (req, res) => {
+    console.log('📤 Recibiendo upload request...');
+    
     if (!req.file) {
+        console.log('❌ No hay archivo en la request');
         return res.status(400).json({ error: 'No se ha subido ninguna foto' });
     }
 
     const { tipo } = req.body;
+    console.log('📝 Tipo de entrada:', tipo);
+    
     if (!tipo || !['general', 'vip'].includes(tipo)) {
+        console.log('❌ Tipo de entrada inválido:', tipo);
         return res.status(400).json({ error: 'Tipo de entrada inválido' });
     }
 
     try {
+        // Verificar configuración de Cloudinary
+        if (!process.env.CLOUDINARY_API_SECRET) {
+            console.log('❌ Cloudinary no configurado');
+            return res.status(500).json({ error: 'Servicio de imágenes no configurado' });
+        }
+
         // Obtener precio actual del tipo de entrada
+        console.log('💰 Obteniendo precio para tipo:', tipo);
         const precio = await new Promise((resolve, reject) => {
             db.get('SELECT precio FROM precios_entradas WHERE tipo = ?', [tipo], (err, row) => {
-                if (err) reject(err);
-                else resolve(row?.precio || 0);
+                if (err) {
+                    console.error('Error obteniendo precio:', err);
+                    reject(err);
+                } else {
+                    const precioFinal = row?.precio || 0;
+                    console.log('💰 Precio obtenido:', precioFinal);
+                    resolve(precioFinal);
+                }
             });
         });
 
         // Subir a Cloudinary
+        console.log('☁️ Subiendo imagen a Cloudinary...');
         const timestamp = Date.now();
         const result = await new Promise((resolve, reject) => {
             cloudinary.uploader.upload_stream(
@@ -109,54 +161,79 @@ app.post('/api/upload', upload.single('photo'), async (req, res) => {
                     public_id: `${tipo}_${timestamp}`,
                     resource_type: 'image',
                     transformation: [
-                        { width: 800, height: 600, crop: "limit" },
-                        { quality: "auto:good" }
+                        { width: 1200, height: 900, crop: "limit" },
+                        { quality: "auto:good" },
+                        { format: "auto" }
                     ]
                 },
                 (error, result) => {
-                    if (error) reject(error);
-                    else resolve(result);
+                    if (error) {
+                        console.error('❌ Error Cloudinary:', error);
+                        reject(error);
+                    } else {
+                        console.log('✅ Imagen subida a Cloudinary:', result.secure_url);
+                        resolve(result);
+                    }
                 }
             ).end(req.file.buffer);
         });
 
         // Guardar en base de datos
-        db.run(
-            'INSERT INTO fotos_entradas (tipo, filename, cloudinary_url, public_id, precio) VALUES (?, ?, ?, ?, ?)',
-            [tipo, `${tipo}_${timestamp}`, result.secure_url, result.public_id, precio],
-            function(err) {
-                if (err) {
-                    console.error(err);
-                    return res.status(500).json({ error: 'Error al guardar en base de datos' });
+        console.log('💾 Guardando en base de datos...');
+        const dbResult = await new Promise((resolve, reject) => {
+            db.run(
+                'INSERT INTO fotos_entradas (tipo, filename, cloudinary_url, public_id, precio) VALUES (?, ?, ?, ?, ?)',
+                [tipo, `${tipo}_${timestamp}`, result.secure_url, result.public_id, precio],
+                function(err) {
+                    if (err) {
+                        console.error('❌ Error BD:', err);
+                        reject(err);
+                    } else {
+                        console.log('✅ Guardado en BD con ID:', this.lastID);
+                        resolve({ id: this.lastID });
+                    }
                 }
+            );
+        });
 
-                res.json({
-                    success: true,
-                    id: this.lastID,
-                    filename: `${tipo}_${timestamp}`,
-                    cloudinary_url: result.secure_url,
-                    tipo: tipo,
-                    precio: precio,
-                    message: `Foto ${tipo} guardada - $${precio}`
-                });
-            }
-        );
+        console.log('🎉 Upload completado exitosamente');
+        res.json({
+            success: true,
+            id: dbResult.id,
+            filename: `${tipo}_${timestamp}`,
+            cloudinary_url: result.secure_url,
+            tipo: tipo,
+            precio: precio,
+            message: `Foto ${tipo} guardada - $${precio}`
+        });
 
     } catch (error) {
-        console.error('Error subiendo a Cloudinary:', error);
-        res.status(500).json({ error: 'Error al subir la imagen' });
+        console.error('💥 Error en upload:', error);
+        
+        // Error específico de Cloudinary
+        if (error.message && error.message.includes('Must supply api_secret')) {
+            return res.status(500).json({ error: 'Error de configuración: API Secret no válido' });
+        }
+        
+        res.status(500).json({ 
+            error: 'Error al subir la imagen: ' + (error.message || 'Error desconocido')
+        });
     }
 });
 
 // Ruta para obtener todas las fotos
 app.get('/api/photos', (req, res) => {
+    console.log('📸 Obteniendo todas las fotos...');
+    
     db.all(
         'SELECT * FROM fotos_entradas ORDER BY timestamp DESC',
         (err, rows) => {
             if (err) {
-                console.error(err);
+                console.error('❌ Error obteniendo fotos:', err);
                 return res.status(500).json({ error: 'Error al obtener fotos' });
             }
+            
+            console.log('✅ Fotos obtenidas:', rows.length);
             res.json(rows);
         }
     );
@@ -165,6 +242,7 @@ app.get('/api/photos', (req, res) => {
 // Ruta para obtener fotos por tipo
 app.get('/api/photos/:tipo', (req, res) => {
     const { tipo } = req.params;
+    console.log('📸 Obteniendo fotos del tipo:', tipo);
     
     if (!['general', 'vip'].includes(tipo)) {
         return res.status(400).json({ error: 'Tipo de entrada inválido' });
@@ -175,9 +253,11 @@ app.get('/api/photos/:tipo', (req, res) => {
         [tipo],
         (err, rows) => {
             if (err) {
-                console.error(err);
+                console.error('❌ Error obteniendo fotos por tipo:', err);
                 return res.status(500).json({ error: 'Error al obtener fotos' });
             }
+            
+            console.log(`✅ Fotos ${tipo} obtenidas:`, rows.length);
             res.json(rows);
         }
     );
@@ -185,11 +265,15 @@ app.get('/api/photos/:tipo', (req, res) => {
 
 // Ruta para obtener precios
 app.get('/api/precios', (req, res) => {
+    console.log('💰 Obteniendo precios...');
+    
     db.all('SELECT * FROM precios_entradas ORDER BY tipo', (err, rows) => {
         if (err) {
-            console.error(err);
+            console.error('❌ Error obteniendo precios:', err);
             return res.status(500).json({ error: 'Error al obtener precios' });
         }
+        
+        console.log('✅ Precios obtenidos:', rows);
         res.json(rows);
     });
 });
@@ -198,6 +282,8 @@ app.get('/api/precios', (req, res) => {
 app.put('/api/precios/:tipo', (req, res) => {
     const { tipo } = req.params;
     const { precio } = req.body;
+    
+    console.log('💰 Actualizando precio:', tipo, precio);
 
     if (!['general', 'vip'].includes(tipo)) {
         return res.status(400).json({ error: 'Tipo de entrada inválido' });
@@ -212,9 +298,11 @@ app.put('/api/precios/:tipo', (req, res) => {
         [precio, tipo],
         function(err) {
             if (err) {
-                console.error(err);
+                console.error('❌ Error actualizando precio:', err);
                 return res.status(500).json({ error: 'Error al actualizar precio' });
             }
+            
+            console.log('✅ Precio actualizado:', tipo, precio);
             res.json({ 
                 success: true, 
                 tipo, 
@@ -227,6 +315,8 @@ app.put('/api/precios/:tipo', (req, res) => {
 
 // Ruta para obtener estadísticas
 app.get('/api/estadisticas', (req, res) => {
+    console.log('📊 Calculando estadísticas...');
+    
     const queries = {
         general: 'SELECT COUNT(*) as cantidad, COALESCE(SUM(precio), 0) as total FROM fotos_entradas WHERE tipo = "general"',
         vip: 'SELECT COUNT(*) as cantidad, COALESCE(SUM(precio), 0) as total FROM fotos_entradas WHERE tipo = "vip"',
@@ -242,7 +332,7 @@ app.get('/api/estadisticas', (req, res) => {
     Object.entries(queries).forEach(([key, query]) => {
         db.get(query, (err, row) => {
             if (err) {
-                console.error(err);
+                console.error('❌ Error en estadística', key, err);
                 return res.status(500).json({ error: 'Error al obtener estadísticas' });
             }
             
@@ -253,6 +343,7 @@ app.get('/api/estadisticas', (req, res) => {
             
             completed++;
             if (completed === totalQueries) {
+                console.log('✅ Estadísticas calculadas:', stats);
                 res.json(stats);
             }
         });
@@ -262,6 +353,7 @@ app.get('/api/estadisticas', (req, res) => {
 // Ruta para eliminar foto (opcional)
 app.delete('/api/photos/:id', async (req, res) => {
     const { id } = req.params;
+    console.log('🗑️ Eliminando foto ID:', id);
 
     try {
         // Obtener info de la foto antes de eliminar
@@ -276,52 +368,90 @@ app.delete('/api/photos/:id', async (req, res) => {
             return res.status(404).json({ error: 'Foto no encontrada' });
         }
 
-        // Eliminar de Cloudinary
-        await cloudinary.uploader.destroy(photo.public_id);
+        // Eliminar de Cloudinary si está configurado
+        if (process.env.CLOUDINARY_API_SECRET) {
+            try {
+                await cloudinary.uploader.destroy(photo.public_id);
+                console.log('✅ Imagen eliminada de Cloudinary');
+            } catch (cloudError) {
+                console.warn('⚠️ Error eliminando de Cloudinary:', cloudError.message);
+            }
+        }
 
         // Eliminar de base de datos
         db.run('DELETE FROM fotos_entradas WHERE id = ?', [id], function(err) {
             if (err) {
-                console.error(err);
+                console.error('❌ Error eliminando de BD:', err);
                 return res.status(500).json({ error: 'Error al eliminar foto' });
             }
+            
+            console.log('✅ Foto eliminada de BD');
             res.json({ success: true, message: 'Foto eliminada correctamente' });
         });
 
     } catch (error) {
-        console.error('Error eliminando foto:', error);
+        console.error('💥 Error eliminando foto:', error);
         res.status(500).json({ error: 'Error al eliminar la foto' });
     }
 });
 
 // Ruta de salud del servidor
 app.get('/api/health', (req, res) => {
-    res.json({ 
-        status: 'OK', 
+    const health = {
+        status: 'OK',
         timestamp: new Date().toISOString(),
-        uptime: process.uptime()
+        uptime: process.uptime(),
+        cloudinary: !!process.env.CLOUDINARY_API_SECRET,
+        database: 'SQLite',
+        node_version: process.version
+    };
+    
+    console.log('🏥 Health check:', health);
+    res.json(health);
+});
+
+// Ruta de configuración (para debug)
+app.get('/api/config', (req, res) => {
+    res.json({
+        cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'detmqufi2',
+        api_key: process.env.CLOUDINARY_API_KEY || '341624499929153',
+        api_secret_configured: !!process.env.CLOUDINARY_API_SECRET,
+        node_env: process.env.NODE_ENV || 'development'
     });
 });
 
 // Manejo de rutas no encontradas
 app.use('*', (req, res) => {
+    console.log('❓ Ruta no encontrada:', req.originalUrl);
     res.status(404).json({ error: 'Ruta no encontrada' });
 });
 
 // Cerrar base de datos al terminar el proceso
 process.on('SIGINT', () => {
-    console.log('\nCerrando servidor...');
+    console.log('\n🔄 Cerrando servidor...');
     db.close((err) => {
         if (err) {
-            console.error('Error cerrando base de datos:', err.message);
+            console.error('❌ Error cerrando base de datos:', err.message);
         } else {
-            console.log('Base de datos cerrada.');
+            console.log('✅ Base de datos cerrada correctamente');
         }
         process.exit(0);
     });
 });
 
+process.on('SIGTERM', () => {
+    console.log('🔄 SIGTERM recibido, cerrando servidor...');
+    db.close(() => {
+        process.exit(0);
+    });
+});
+
+// Iniciar servidor
 app.listen(PORT, () => {
-    console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-    console.log(`📱 Abre tu navegador en: http://localhost:${PORT}`);
+    console.log('\n🚀 ================================');
+    console.log(`📱 Servidor corriendo en puerto ${PORT}`);
+    console.log(`🌐 URL: http://localhost:${PORT}`);
+    console.log(`☁️ Cloudinary: ${process.env.CLOUDINARY_CLOUD_NAME || 'detmqufi2'}`);
+    console.log(`🔑 API Secret: ${process.env.CLOUDINARY_API_SECRET ? '✅ Configurado' : '❌ Faltante'}`);
+    console.log('🚀 ================================\n');
 });
