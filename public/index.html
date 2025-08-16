@@ -168,6 +168,12 @@
             border: 1px solid #f5c6cb;
         }
 
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
         .connection-status {
             position: fixed;
             top: 20px;
@@ -364,6 +370,7 @@
     <script>
         let selectedType = '';
         let selectedFile = null;
+        let pendingFile = null; // Archivo pendiente de subir
         let currentPrices = { general: 50, vip: 100 };
         let isOnline = navigator.onLine;
 
@@ -411,7 +418,7 @@
         }
 
         // Event listener para el input de archivos
-        document.getElementById('photoInput').addEventListener('change', function(e) {
+        document.getElementById('photoInput').addEventListener('change', async function(e) {
             const file = e.target.files[0];
             if (file) {
                 console.log('📁 Archivo seleccionado:', file.name, file.size, file.type);
@@ -430,6 +437,19 @@
                     return;
                 }
 
+                // Si hay una foto pendiente, subirla automáticamente antes de procesar la nueva
+                if (pendingFile && selectedType) {
+                    console.log('📤 Subiendo foto pendiente automáticamente...');
+                    showStatus('📤 Subiendo foto anterior...', 'info');
+                    
+                    const oldFile = pendingFile;
+                    const oldType = selectedType;
+                    
+                    await uploadPendingPhoto(oldFile, oldType);
+                }
+
+                // Asignar nueva foto como pendiente
+                pendingFile = file;
                 selectedFile = file;
                 
                 // Verificar si está activado el modo automático
@@ -466,14 +486,52 @@
         // Función para preparar la siguiente foto en modo automático
         function resetForNextPhoto() {
             selectedFile = null;
+            pendingFile = null; // Limpiar foto pendiente después de subir
             document.getElementById('photoInput').value = '';
             // Mantener el tipo seleccionado para facilitar múltiples fotos del mismo tipo
             console.log('🔄 Lista para siguiente foto del tipo:', selectedType);
         }
 
+        // Función para subir foto pendiente automáticamente
+        async function uploadPendingPhoto(file, tipo) {
+            if (!file || !tipo) return;
+
+            console.log('🚀 Subiendo foto pendiente...', { tipo: tipo, archivo: file.name });
+
+            const formData = new FormData();
+            formData.append('photo', file);
+            formData.append('tipo', tipo);
+
+            try {
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    console.log('✅ Foto pendiente subida:', result.message);
+                    showStatus(`✅ Foto anterior subida: ${result.message}`, 'success');
+                    await Promise.all([loadGallery(), loadStats()]);
+                } else {
+                    console.error('❌ Error subiendo foto pendiente:', result.error);
+                    showStatus(`❌ Error subiendo foto anterior: ${result.error}`, 'error');
+                }
+            } catch (error) {
+                console.error('💥 Error en subida pendiente:', error);
+                showStatus('❌ Error subiendo foto anterior', 'error');
+            }
+        }
+
         // Función para cancelar la foto
         function cancelPhoto() {
             selectedFile = null;
+            pendingFile = null;
             selectedType = '';
             document.getElementById('photoPreview').classList.add('hidden');
             document.getElementById('photoInput').value = '';
