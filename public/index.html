@@ -410,11 +410,25 @@
                 <!-- Opciones de cámara para móviles -->
                 <div class="text-center mb-3">
                     <small class="text-muted">
-                        <i class="bi bi-camera"></i> En móviles: se abrirá automáticamente la cámara trasera
+                        <i class="bi bi-camera"></i> En móviles: se abrirá automáticamente la cámara trasera (sin flash)
                     </small>
                 </div>
 
                 <input type="file" id="photoInput" accept="image/*" capture="environment" class="hidden">
+                
+                <!-- Cámara avanzada con control de flash -->
+                <div id="advancedCamera" class="hidden">
+                    <video id="cameraVideo" autoplay playsinline style="width: 100%; max-width: 400px; border-radius: 10px; margin-bottom: 15px;"></video>
+                    <canvas id="cameraCanvas" class="hidden"></canvas>
+                    <div class="d-flex gap-2 justify-content-center mb-3">
+                        <button class="btn btn-success" onclick="capturePhoto()">
+                            <i class="bi bi-camera"></i> Capturar
+                        </button>
+                        <button class="btn btn-outline-secondary" onclick="stopCamera()">
+                            <i class="bi bi-x-circle"></i> Cerrar Cámara
+                        </button>
+                    </div>
+                </div>
                 
                 <div id="photoPreview" class="preview hidden">
                     <img id="previewImg" src="" alt="Preview" class="img-fluid">
@@ -646,6 +660,10 @@
             }
         }
 
+        // Variables para cámara avanzada
+        let cameraStream = null;
+        let cameraMode = 'file'; // 'file' o 'advanced'
+
         // Función para seleccionar tipo de foto
         function selectPhotoType(type) {
             return requireAuth(() => {
@@ -661,71 +679,186 @@
                 document.getElementById('btnGeneral').style.opacity = type === 'general' ? '1' : '0.7';
                 document.getElementById('btnVip').style.opacity = type === 'vip' ? '1' : '0.7';
                 
-                document.getElementById('photoInput').click();
+                // Intentar usar cámara avanzada primero (sin flash), si falla usar input file
+                if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                    startAdvancedCamera();
+                } else {
+                    // Fallback al método de input file
+                    document.getElementById('photoInput').click();
+                }
             });
+        }
+
+        // Función para iniciar cámara avanzada sin flash
+        async function startAdvancedCamera() {
+            try {
+                console.log('📷 Iniciando cámara avanzada sin flash...');
+                
+                const constraints = {
+                    video: {
+                        facingMode: 'environment', // Cámara trasera
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 }
+                    },
+                    audio: false
+                };
+
+                // Desactivar flash explícitamente si el navegador lo soporta
+                if ('torch' in navigator.mediaDevices.getSupportedConstraints()) {
+                    constraints.video.torch = false;
+                }
+
+                cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+                const video = document.getElementById('cameraVideo');
+                video.srcObject = cameraStream;
+                
+                // Intentar desactivar flash en el track de video
+                const videoTrack = cameraStream.getVideoTracks()[0];
+                if (videoTrack && 'applyConstraints' in videoTrack) {
+                    try {
+                        await videoTrack.applyConstraints({
+                            torch: false,
+                            advanced: [{ torch: false }]
+                        });
+                        console.log('✅ Flash desactivado explícitamente');
+                    } catch (err) {
+                        console.log('⚠️ No se pudo controlar el flash:', err.message);
+                    }
+                }
+                
+                // Mostrar interfaz de cámara avanzada
+                document.getElementById('advancedCamera').classList.remove('hidden');
+                cameraMode = 'advanced';
+                
+                console.log('✅ Cámara avanzada iniciada sin flash');
+                showStatus('📷 Cámara lista - Sin flash', 'info');
+                
+            } catch (error) {
+                console.log('❌ Error con cámara avanzada, usando fallback:', error.message);
+                // Fallback al método de input file
+                document.getElementById('photoInput').click();
+                cameraMode = 'file';
+            }
+        }
+
+        // Función para capturar foto desde cámara avanzada
+        function capturePhoto() {
+            try {
+                const video = document.getElementById('cameraVideo');
+                const canvas = document.getElementById('cameraCanvas');
+                const ctx = canvas.getContext('2d');
+                
+                // Establecer tamaño del canvas
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                
+                // Capturar frame actual del video
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                // Convertir a blob
+                canvas.toBlob(async (blob) => {
+                    const file = new File([blob], `camera_${Date.now()}.jpg`, {
+                        type: 'image/jpeg',
+                        lastModified: Date.now()
+                    });
+                    
+                    console.log('📸 Foto capturada desde cámara avanzada:', file.name);
+                    
+                    // Cerrar cámara
+                    stopCamera();
+                    
+                    // Procesar como archivo normal
+                    await processImageFile(file);
+                    
+                }, 'image/jpeg', 0.8);
+                
+            } catch (error) {
+                console.error('❌ Error capturando foto:', error);
+                showStatus('Error al capturar foto', 'error');
+            }
+        }
+
+        // Función para detener cámara avanzada
+        function stopCamera() {
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => {
+                    track.stop();
+                });
+                cameraStream = null;
+            }
+            
+            document.getElementById('advancedCamera').classList.add('hidden');
+            resetButtons();
+            cameraMode = 'file';
+            console.log('📷 Cámara avanzada cerrada');
+        }
+
+        // Función para procesar archivos de imagen (unificada para ambos modos)
+        async function processImageFile(file) {
+            console.log('📁 Procesando archivo:', file.name, file.size, file.type);
+
+            // Validar que sea una imagen
+            if (!file.type.startsWith('image/')) {
+                showStatus('Por favor selecciona un archivo de imagen válido', 'error');
+                resetButtons();
+                return;
+            }
+
+            // Validar tamaño (10MB máximo)
+            if (file.size > 10 * 1024 * 1024) {
+                showStatus('El archivo es muy grande. Máximo 10MB.', 'error');
+                resetButtons();
+                return;
+            }
+
+            // Si hay una foto pendiente, subirla automáticamente antes de procesar la nueva
+            if (pendingFile && selectedType) {
+                console.log('📤 Subiendo foto pendiente automáticamente...');
+                showStatus('📤 Subiendo foto anterior...', 'info');
+                
+                const oldFile = pendingFile;
+                const oldType = selectedType;
+                
+                await uploadPendingPhoto(oldFile, oldType);
+            }
+
+            // Comprimir imagen automáticamente (máxima velocidad)
+            showStatus('⚡ Compresión rápida...', 'info');
+            const compressedFile = await compressImage(file);
+            showStatus('🚀 Subiendo...', 'info');
+
+            // Asignar nueva foto comprimida como pendiente
+            pendingFile = compressedFile;
+            selectedFile = compressedFile;
+            
+            // Verificar si está activado el modo automático
+            const autoMode = document.getElementById('autoUploadMode').checked;
+            
+            if (autoMode) {
+                // Subida automática - sin preview
+                console.log('⚡ Modo automático activado - subiendo inmediatamente...');
+                uploadPhoto();
+            } else {
+                // Modo normal - mostrar preview
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    document.getElementById('previewImg').src = e.target.result;
+                    document.getElementById('photoPreview').classList.remove('hidden');
+                    console.log('🖼️ Imagen cargada para preview');
+                }
+                reader.onerror = function() {
+                    showStatus('Error al cargar la imagen', 'error');
+                    resetButtons();
+                }
+                reader.readAsDataURL(file);
+            }
         }
 
         // Event listener para el input de archivos
         document.getElementById('photoInput').addEventListener('change', async function(e) {
             const file = e.target.files[0];
             if (file) {
-                console.log('📁 Archivo seleccionado:', file.name, file.size, file.type);
-
-                // Validar que sea una imagen
-                if (!file.type.startsWith('image/')) {
-                    showStatus('Por favor selecciona un archivo de imagen válido', 'error');
-                    resetButtons();
-                    return;
-                }
-
-                // Validar tamaño (10MB máximo)
-                if (file.size > 10 * 1024 * 1024) {
-                    showStatus('El archivo es muy grande. Máximo 10MB.', 'error');
-                    resetButtons();
-                    return;
-                }
-
-                // Si hay una foto pendiente, subirla automáticamente antes de procesar la nueva
-                if (pendingFile && selectedType) {
-                    console.log('📤 Subiendo foto pendiente automáticamente...');
-                    showStatus('📤 Subiendo foto anterior...', 'info');
-                    
-                    const oldFile = pendingFile;
-                    const oldType = selectedType;
-                    
-                    await uploadPendingPhoto(oldFile, oldType);
-                }
-
-                // Comprimir imagen automáticamente (máxima velocidad)
-                showStatus('⚡ Compresión rápida...', 'info');
-                const compressedFile = await compressImage(file);
-                showStatus('🚀 Subiendo...', 'info');
-
-                // Asignar nueva foto comprimida como pendiente
-                pendingFile = compressedFile;
-                selectedFile = compressedFile;
-                
-                // Verificar si está activado el modo automático
-                const autoMode = document.getElementById('autoUploadMode').checked;
-                
-                if (autoMode) {
-                    // Subida automática - sin preview
-                    console.log('⚡ Modo automático activado - subiendo inmediatamente...');
-                    uploadPhoto();
-                } else {
-                    // Modo normal - mostrar preview
-                    const reader = new FileReader();
-                    reader.onload = function(e) {
-                        document.getElementById('previewImg').src = e.target.result;
-                        document.getElementById('photoPreview').classList.remove('hidden');
-                        console.log('🖼️ Imagen cargada para preview');
-                    }
-                    reader.onerror = function() {
-                        showStatus('Error al cargar la imagen', 'error');
-                        resetButtons();
-                    }
-                    reader.readAsDataURL(file);
-                }
+                await processImageFile(file);
             } else {
                 resetButtons();
             }
@@ -797,6 +930,13 @@
             selectedFile = null;
             pendingFile = null; // Limpiar foto pendiente después de subir
             document.getElementById('photoInput').value = '';
+            document.getElementById('photoPreview').classList.add('hidden');
+            
+            // Cerrar cámara avanzada si está abierta
+            if (cameraMode === 'advanced') {
+                stopCamera();
+            }
+            
             // Mantener el tipo seleccionado para facilitar múltiples fotos del mismo tipo
             console.log('🔄 Lista para siguiente foto del tipo:', selectedType);
         }
@@ -844,6 +984,12 @@
             selectedType = '';
             document.getElementById('photoPreview').classList.add('hidden');
             document.getElementById('photoInput').value = '';
+            
+            // Cerrar cámara avanzada si está abierta
+            if (cameraMode === 'advanced') {
+                stopCamera();
+            }
+            
             resetButtons();
             clearStatus();
             console.log('❌ Foto cancelada');
@@ -1313,13 +1459,37 @@
         // Event listeners para teclas
         document.addEventListener('keydown', function(e) {
             // ESC para cancelar
-            if (e.key === 'Escape' && !document.getElementById('photoPreview').classList.contains('hidden')) {
-                cancelPhoto();
+            if (e.key === 'Escape') {
+                if (!document.getElementById('photoPreview').classList.contains('hidden')) {
+                    cancelPhoto();
+                } else if (cameraMode === 'advanced') {
+                    stopCamera();
+                }
             }
             
             // Enter para subir foto si está en preview
             if (e.key === 'Enter' && !document.getElementById('photoPreview').classList.contains('hidden')) {
                 uploadPhoto();
+            }
+            
+            // Espacio para capturar si la cámara avanzada está activa
+            if (e.key === ' ' && cameraMode === 'advanced') {
+                e.preventDefault();
+                capturePhoto();
+            }
+        });
+
+        // Cerrar cámara al salir de la página
+        window.addEventListener('beforeunload', function() {
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => track.stop());
+            }
+        });
+
+        // Detener cámara cuando la página pierde el foco
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden && cameraMode === 'advanced') {
+                stopCamera();
             }
         });
 
