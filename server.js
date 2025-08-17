@@ -23,42 +23,50 @@ if (!process.env.CLOUDINARY_API_SECRET) {
 }
 
 // Configuración de multer para memoria (no disco)
-// Configuración SFTP
+// Configuración SFTP optimizada para velocidad
 const sftpConfig = {
     host: process.env.SFTP_HOST || '192.168.1.86',
     port: parseInt(process.env.SFTP_PORT) || 22,
     username: process.env.SFTP_USERNAME || 'silva',
-    password: process.env.SFTP_PASSWORD || '71749437'
+    password: process.env.SFTP_PASSWORD || '71749437',
+    readyTimeout: 10000, // 10 segundos timeout
+    keepaliveInterval: 5000,
+    algorithms: {
+        kex: ['diffie-hellman-group14-sha256'],
+        cipher: ['aes128-ctr'],
+        hmac: ['hmac-sha2-256']
+    }
 };
 
 const SFTP_REMOTE_PATH = process.env.SFTP_REMOTE_PATH || '/home/silva/fotos-entradas';
 
-// Función para subir archivo a SFTP
+// Función optimizada para subir archivo a SFTP (máxima velocidad)
 async function uploadToSFTP(buffer, filename) {
     const sftp = new SftpClient();
     try {
-        console.log('📡 Conectando a servidor SFTP:', sftpConfig.host);
+        console.log('📡 Conectando a SFTP rápido:', sftpConfig.host);
         await sftp.connect(sftpConfig);
         
-        // Crear directorio remoto si no existe
-        try {
-            await sftp.mkdir(SFTP_REMOTE_PATH, true);
-        } catch (error) {
-            // Directorio ya existe, continuar
-        }
-        
         const remotePath = `${SFTP_REMOTE_PATH}/${filename}`;
-        console.log('📤 Subiendo archivo a:', remotePath);
+        console.log('📤 Subida express:', filename);
         
-        await sftp.put(buffer, remotePath);
-        console.log('✅ Archivo subido exitosamente via SFTP');
+        // Subida directa sin verificaciones extra para máxima velocidad
+        await sftp.put(buffer, remotePath, {
+            writeStreamOptions: {
+                flags: 'w',
+                encoding: null,
+                mode: 0o644,
+                autoClose: true
+            }
+        });
+        console.log('⚡ Subida completada');
         
         return remotePath;
     } catch (error) {
-        console.error('❌ Error en SFTP:', error);
+        console.error('❌ Error SFTP:', error.message);
         throw error;
     } finally {
-        await sftp.end();
+        sftp.end();
     }
 }
 
@@ -187,31 +195,35 @@ app.get('/api/image/:filename', async (req, res) => {
             return res.status(404).json({ error: 'Imagen no encontrada' });
         }
         
-        try {
-            // Intentar descargar desde SFTP
-            const imageBuffer = await downloadFromSFTP(row.local_path);
-            console.log('✅ Sirviendo imagen desde SFTP:', row.local_path);
-            
-            // Detectar tipo de contenido basado en la extensión
-            const ext = path.extname(filename).toLowerCase();
-            let contentType = 'image/jpeg';
-            if (ext === '.png') contentType = 'image/png';
-            else if (ext === '.gif') contentType = 'image/gif';
-            else if (ext === '.webp') contentType = 'image/webp';
-            
-            res.set('Content-Type', contentType);
-            res.send(imageBuffer);
-        } catch (sftpError) {
-            console.warn('⚠️ Error descargando desde SFTP, intentando Cloudinary:', sftpError.message);
-            
-            // Fallback: redirigir a Cloudinary si está disponible
-            if (row.cloudinary_url) {
-                console.log('🔄 Redirigiendo a Cloudinary:', row.cloudinary_url);
-                return res.redirect(row.cloudinary_url);
-            } else {
-                console.log('❌ No hay fallback disponible');
-                return res.status(404).json({ error: 'Archivo no disponible' });
+        // Verificar si es una ruta SFTP real o marcador
+        if (row.local_path && row.local_path.startsWith('/home/')) {
+            try {
+                // Intentar descargar desde SFTP (solo en desarrollo)
+                const imageBuffer = await downloadFromSFTP(row.local_path);
+                console.log('✅ Sirviendo imagen desde SFTP:', row.local_path);
+                
+                // Detectar tipo de contenido basado en la extensión
+                const ext = path.extname(filename).toLowerCase();
+                let contentType = 'image/jpeg';
+                if (ext === '.png') contentType = 'image/png';
+                else if (ext === '.gif') contentType = 'image/gif';
+                else if (ext === '.webp') contentType = 'image/webp';
+                
+                res.set('Content-Type', contentType);
+                res.send(imageBuffer);
+                return;
+            } catch (sftpError) {
+                console.warn('⚠️ Error descargando desde SFTP, intentando Cloudinary:', sftpError.message);
             }
+        }
+        
+        // Usar Cloudinary como principal/fallback
+        if (row.cloudinary_url) {
+            console.log('🔄 Redirigiendo a Cloudinary:', row.cloudinary_url);
+            return res.redirect(row.cloudinary_url);
+        } else {
+            console.log('❌ No hay URL de Cloudinary disponible');
+            return res.status(404).json({ error: 'Archivo no disponible' });
         }
         
     } catch (error) {
@@ -262,19 +274,25 @@ app.post('/api/upload', upload.single('photo'), async (req, res) => {
         let cloudinaryUrl = null;
         let publicId = null;
 
-        // Subir archivo a servidor SFTP
-        try {
-            sftpPath = await uploadToSFTP(req.file.buffer, filename);
-            console.log('📁 Foto guardada en servidor SFTP:', sftpPath);
-        } catch (error) {
-            console.error('❌ Error subiendo a SFTP:', error);
-            return res.status(500).json({ error: 'Error al guardar archivo en servidor remoto' });
+        // Subir archivo a servidor SFTP (solo en desarrollo local)
+        if (process.env.NODE_ENV !== 'production' && process.env.SFTP_HOST) {
+            try {
+                sftpPath = await uploadToSFTP(req.file.buffer, filename);
+                console.log('📁 Foto guardada en servidor SFTP:', sftpPath);
+            } catch (error) {
+                console.warn('⚠️ Error subiendo a SFTP, usando solo Cloudinary:', error.message);
+                sftpPath = `local://${filename}`; // Marcador para archivo local
+            }
+        } else {
+            // En producción, usar solo Cloudinary
+            console.log('🌐 Modo producción: usando solo Cloudinary');
+            sftpPath = `cloud://${filename}`;
         }
 
-        // Intentar subir a Cloudinary como respaldo (opcional)
-        if (process.env.CLOUDINARY_API_SECRET) {
+        // Subir a Cloudinary solo en producción (cuando no hay SFTP)
+        if (process.env.NODE_ENV === 'production' && process.env.CLOUDINARY_API_SECRET) {
             try {
-                console.log('☁️ Subiendo imagen a Cloudinary como respaldo...');
+                console.log('☁️ Subiendo imagen a Cloudinary (modo producción)...');
                 const cloudinaryResult = await new Promise((resolve, reject) => {
                     cloudinary.uploader.upload_stream(
                         {
@@ -282,17 +300,16 @@ app.post('/api/upload', upload.single('photo'), async (req, res) => {
                             public_id: `${tipo}_${timestamp}`,
                             resource_type: 'image',
                             transformation: [
-                                { width: 1200, height: 900, crop: "limit" },
-                                { quality: "auto:good" },
-                                { format: "auto" }
+                                { width: 800, height: 600, crop: "limit" },
+                                { quality: "60" },
+                                { format: "jpg" }
                             ]
                         },
                         (error, result) => {
                             if (error) {
-                                console.warn('⚠️ Error en Cloudinary (continuando con archivo SFTP):', error.message);
-                                resolve(null);
+                                reject(error);
                             } else {
-                                console.log('✅ Imagen respaldada en Cloudinary:', result.secure_url);
+                                console.log('✅ Imagen subida a Cloudinary:', result.secure_url);
                                 resolve(result);
                             }
                         }
@@ -304,8 +321,11 @@ app.post('/api/upload', upload.single('photo'), async (req, res) => {
                     publicId = cloudinaryResult.public_id;
                 }
             } catch (error) {
-                console.warn('⚠️ Error con Cloudinary, usando solo archivo SFTP:', error.message);
+                console.error('❌ Error con Cloudinary en producción:', error.message);
+                return res.status(500).json({ error: 'Error al subir imagen' });
             }
+        } else {
+            console.log('🚀 Modo desarrollo: solo SFTP (máxima velocidad)');
         }
 
         // Guardar información en base de datos
@@ -639,7 +659,7 @@ app.get('/api/database-stats', (req, res) => {
                     total_size_mb: 0,
                     average_size_kb: 0,
                     database_size_mb: 0,
-                    storage_location: `SFTP: ${sftpConfig.host}:${SFTP_REMOTE_PATH}`,
+                    storage_location: process.env.NODE_ENV === 'production' ? 'Cloudinary (Producción)' : `SFTP: ${sftpConfig.host}:${SFTP_REMOTE_PATH}`,
                     photos_today: 0
                 });
             }
@@ -673,7 +693,7 @@ app.get('/api/database-stats', (req, res) => {
                         total_size_mb: (totalSize / (1024 * 1024)).toFixed(2),
                         average_size_kb: stats.total_photos > 0 ? (totalSize / 1024 / stats.total_photos).toFixed(2) : estimatedSizePerPhoto,
                         database_size_mb: (dbSize / (1024 * 1024)).toFixed(2),
-                        storage_location: `SFTP: ${sftpConfig.host}:${SFTP_REMOTE_PATH}`,
+                        storage_location: process.env.NODE_ENV === 'production' ? 'Cloudinary (Producción)' : `SFTP: ${sftpConfig.host}:${SFTP_REMOTE_PATH}`,
                         photos_today: todayCount ? todayCount.photos_today : 0
                     };
                     
