@@ -20,7 +20,7 @@ export const CONFIG = {
     
     // API Endpoints
     API: {
-        BASE_URL: '/api',
+        BASE_URL: 'https://gestor-fotos-entradas.onrender.com/api',
         ENDPOINTS: {
             LOGIN: '/auth/login',
             LOGOUT: '/auth/logout',
@@ -92,9 +92,9 @@ export const CONFIG = {
     
     // Development settings
     DEVELOPMENT: {
-        SUPPRESS_API_WARNINGS: true,  // Set to false to see API warnings
-        OFFLINE_MODE: true,          // Assume offline for development
-        DEBUG_LEVEL: 'minimal'       // 'verbose', 'normal', 'minimal'
+        SUPPRESS_API_WARNINGS: false,  // Show API warnings to debug
+        OFFLINE_MODE: false,           // Connect to real backend  
+        DEBUG_LEVEL: 'normal'          // 'verbose', 'normal', 'minimal'
     }
 };
 
