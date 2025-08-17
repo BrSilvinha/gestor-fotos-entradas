@@ -386,14 +386,11 @@
         <div class="card shadow-lg mb-4">
             <div class="card-body">
                 <h3 class="card-title mb-4">📷 Tomar Fotos</h3>
-                <!-- Configuración de modo -->
+                <!-- Modo ultrarrápido siempre activo -->
                 <div class="row mb-3">
                     <div class="col-12">
-                        <div class="form-check form-switch">
-                            <input class="form-check-input" type="checkbox" id="autoUploadMode">
-                            <label class="form-check-label fw-semibold" for="autoUploadMode">
-                                <i class="bi bi-lightning-charge"></i> Subida automática (sin confirmación)
-                            </label>
+                        <div class="alert alert-info py-2 mb-0">
+                            <i class="bi bi-lightning-charge"></i> <strong>Modo ultrarrápido activo:</strong> Tomar foto → Subir automáticamente → Lista para siguiente
                         </div>
                     </div>
                 </div>
@@ -407,26 +404,14 @@
                     </button>
                 </div>
 
-                <!-- Opciones de cámara para móviles -->
+                <!-- Cámara ultrarrápida -->
                 <div class="text-center mb-3">
                     <small class="text-muted">
-                        <i class="bi bi-camera"></i> Se abrirá tu cámara directamente (sin flash) - Presiona Espacio para capturar
+                        <i class="bi bi-lightning-charge"></i> Modo ultrarrápido: Toma foto → Procesa automáticamente → Lista para siguiente
                     </small>
                 </div>
-                
-                <!-- Cámara avanzada con control de flash -->
-                <div id="advancedCamera" class="hidden">
-                    <video id="cameraVideo" autoplay playsinline style="width: 100%; max-width: 400px; border-radius: 10px; margin-bottom: 15px;"></video>
-                    <canvas id="cameraCanvas" class="hidden"></canvas>
-                    <div class="d-flex gap-2 justify-content-center mb-3">
-                        <button class="btn btn-success" onclick="capturePhoto()">
-                            <i class="bi bi-camera"></i> Capturar
-                        </button>
-                        <button class="btn btn-outline-secondary" onclick="stopCamera()">
-                            <i class="bi bi-x-circle"></i> Cerrar Cámara
-                        </button>
-                    </div>
-                </div>
+
+                <input type="file" id="photoInput" accept="image/*" capture="environment" class="hidden">
                 
                 <div id="photoPreview" class="preview hidden">
                     <img id="previewImg" src="" alt="Preview" class="img-fluid">
@@ -662,7 +647,7 @@
         let cameraStream = null;
         let cameraMode = 'file'; // 'file' o 'advanced'
 
-        // Función para seleccionar tipo de foto
+        // Función para seleccionar tipo de foto (ultrarrápida)
         function selectPhotoType(type) {
             return requireAuth(() => {
                 if (!isOnline) {
@@ -671,14 +656,14 @@
                 }
 
                 selectedType = type;
-                console.log('📸 Seleccionado tipo:', type);
+                console.log('⚡ Modo ultrarrápido:', type);
                 
                 // Actualizar botones para mostrar el tipo seleccionado
                 document.getElementById('btnGeneral').style.opacity = type === 'general' ? '1' : '0.7';
                 document.getElementById('btnVip').style.opacity = type === 'vip' ? '1' : '0.7';
                 
-                // Siempre usar cámara avanzada directa (sin flash)
-                startAdvancedCamera();
+                // Abrir cámara nativa inmediatamente (pantalla completa)
+                document.getElementById('photoInput').click();
             });
         }
 
@@ -856,7 +841,29 @@
             }
         }
 
-        // Nota: Ya no usamos input file, todo se maneja con cámara directa
+        // Event listener ultrarrápido para el input de archivos
+        document.getElementById('photoInput').addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                console.log('⚡ Foto capturada - procesando inmediatamente...');
+                
+                // Procesamiento ultrarrápido sin preview
+                showStatus('⚡ Procesando...', 'info');
+                
+                // Comprimir imagen (máxima velocidad)
+                const compressedFile = await compressImage(file, 800, 600, 0.6);
+                selectedFile = compressedFile;
+                
+                // Subir inmediatamente sin confirmación
+                await uploadPhotoFast();
+                
+                // Limpiar input para siguiente foto
+                this.value = '';
+                
+                // Mantener el tipo seleccionado para próxima foto
+                console.log('✅ Lista para siguiente foto del tipo:', selectedType);
+            }
+        });
 
         function resetButtons() {
             document.getElementById('btnGeneral').style.opacity = '1';
@@ -987,7 +994,46 @@
             console.log('❌ Foto cancelada');
         }
 
-        // Función para subir la foto
+        // Función de subida ultrarrápida (sin confirmaciones)
+        async function uploadPhotoFast() {
+            if (!selectedFile || !selectedType) {
+                showStatus('Error: No hay foto o tipo seleccionado', 'error');
+                return;
+            }
+
+            console.log('🚀 Subida ultrarrápida iniciada...');
+
+            const formData = new FormData();
+            formData.append('photo', selectedFile);
+            formData.append('tipo', selectedType);
+
+            try {
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showStatus(`✅ ${result.message} - Lista para siguiente foto`, 'success');
+                    
+                    // Actualizar stats en background (no esperar)
+                    Promise.all([loadGallery(), loadStats(), loadDatabaseStats()]).catch(console.error);
+                } else {
+                    showStatus(result.error || 'Error al subir la foto', 'error');
+                }
+            } catch (error) {
+                console.error('💥 Error en upload ultrarrápido:', error);
+                showStatus('Error al subir: ' + error.message, 'error');
+            }
+        }
+
+        // Función para subir la foto (modo normal con preview)
         async function uploadPhoto() {
             if (!isOnline) {
                 showStatus('Sin conexión a internet', 'error');
