@@ -5,6 +5,7 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const cloudinary = require('cloudinary').v2;
+const SftpClient = require('ssh2-sftp-client');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -22,39 +23,47 @@ if (!process.env.CLOUDINARY_API_SECRET) {
 }
 
 // Configuración de multer para memoria (no disco)
-// Directorio local para guardar fotos
-const PHOTOS_DIR = 'Z:\\Foto bailes';
+// Configuración SFTP
+const sftpConfig = {
+    host: process.env.SFTP_HOST || '192.168.1.86',
+    port: parseInt(process.env.SFTP_PORT) || 22,
+    username: process.env.SFTP_USERNAME || 'silva',
+    password: process.env.SFTP_PASSWORD || '71749437'
+};
 
-// Crear directorio si no existe
-if (!fs.existsSync(PHOTOS_DIR)) {
+const SFTP_REMOTE_PATH = process.env.SFTP_REMOTE_PATH || '/home/silva/fotos-entradas';
+
+// Función para subir archivo a SFTP
+async function uploadToSFTP(buffer, filename) {
+    const sftp = new SftpClient();
     try {
-        fs.mkdirSync(PHOTOS_DIR, { recursive: true });
-        console.log('📁 Directorio creado:', PHOTOS_DIR);
-    } catch (error) {
-        console.error('❌ Error creando directorio:', error);
-        console.log('⚠️ Usando directorio local como fallback');
-        const fallbackDir = path.join(__dirname, 'uploads');
-        if (!fs.existsSync(fallbackDir)) {
-            fs.mkdirSync(fallbackDir, { recursive: true });
+        console.log('📡 Conectando a servidor SFTP:', sftpConfig.host);
+        await sftp.connect(sftpConfig);
+        
+        // Crear directorio remoto si no existe
+        try {
+            await sftp.mkdir(SFTP_REMOTE_PATH, true);
+        } catch (error) {
+            // Directorio ya existe, continuar
         }
+        
+        const remotePath = `${SFTP_REMOTE_PATH}/${filename}`;
+        console.log('📤 Subiendo archivo a:', remotePath);
+        
+        await sftp.put(buffer, remotePath);
+        console.log('✅ Archivo subido exitosamente via SFTP');
+        
+        return remotePath;
+    } catch (error) {
+        console.error('❌ Error en SFTP:', error);
+        throw error;
+    } finally {
+        await sftp.end();
     }
 }
 
-// Configuración de multer para guardar archivos localmente
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        // Intentar usar Z:\Foto bailes, si falla usar directorio local
-        const targetDir = fs.existsSync(PHOTOS_DIR) ? PHOTOS_DIR : path.join(__dirname, 'uploads');
-        cb(null, targetDir);
-    },
-    filename: function (req, file, cb) {
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const tipo = req.body.tipo || 'general';
-        const extension = path.extname(file.originalname);
-        const filename = `${tipo}_${timestamp}${extension}`;
-        cb(null, filename);
-    }
-});
+// Configuración de multer para memoria
+const storage = multer.memoryStorage();
 
 const upload = multer({ 
     storage: storage,
@@ -145,34 +154,70 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Ruta para servir fotos locales
-app.get('/api/image/:filename', (req, res) => {
+// Función para descargar archivo desde SFTP
+async function downloadFromSFTP(remotePath) {
+    const sftp = new SftpClient();
+    try {
+        await sftp.connect(sftpConfig);
+        const buffer = await sftp.get(remotePath);
+        await sftp.end();
+        return buffer;
+    } catch (error) {
+        console.error('❌ Error descargando desde SFTP:', error);
+        throw error;
+    }
+}
+
+// Ruta para servir fotos desde SFTP
+app.get('/api/image/:filename', async (req, res) => {
     const filename = req.params.filename;
     console.log('🖼️ Solicitando imagen:', filename);
     
-    // Buscar la foto en la base de datos para obtener la ruta completa
-    db.get('SELECT local_path FROM fotos_entradas WHERE filename = ?', [filename], (err, row) => {
-        if (err) {
-            console.error('❌ Error buscando imagen:', err);
-            return res.status(500).json({ error: 'Error interno' });
-        }
+    try {
+        // Buscar la foto en la base de datos para obtener la ruta SFTP
+        const row = await new Promise((resolve, reject) => {
+            db.get('SELECT local_path, cloudinary_url FROM fotos_entradas WHERE filename = ?', [filename], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
         
         if (!row) {
             console.log('❌ Imagen no encontrada:', filename);
             return res.status(404).json({ error: 'Imagen no encontrada' });
         }
         
-        const imagePath = row.local_path;
-        
-        // Verificar que el archivo existe
-        if (!fs.existsSync(imagePath)) {
-            console.log('❌ Archivo físico no encontrado:', imagePath);
-            return res.status(404).json({ error: 'Archivo no encontrado' });
+        try {
+            // Intentar descargar desde SFTP
+            const imageBuffer = await downloadFromSFTP(row.local_path);
+            console.log('✅ Sirviendo imagen desde SFTP:', row.local_path);
+            
+            // Detectar tipo de contenido basado en la extensión
+            const ext = path.extname(filename).toLowerCase();
+            let contentType = 'image/jpeg';
+            if (ext === '.png') contentType = 'image/png';
+            else if (ext === '.gif') contentType = 'image/gif';
+            else if (ext === '.webp') contentType = 'image/webp';
+            
+            res.set('Content-Type', contentType);
+            res.send(imageBuffer);
+        } catch (sftpError) {
+            console.warn('⚠️ Error descargando desde SFTP, intentando Cloudinary:', sftpError.message);
+            
+            // Fallback: redirigir a Cloudinary si está disponible
+            if (row.cloudinary_url) {
+                console.log('🔄 Redirigiendo a Cloudinary:', row.cloudinary_url);
+                return res.redirect(row.cloudinary_url);
+            } else {
+                console.log('❌ No hay fallback disponible');
+                return res.status(404).json({ error: 'Archivo no disponible' });
+            }
         }
         
-        console.log('✅ Sirviendo imagen desde:', imagePath);
-        res.sendFile(path.resolve(imagePath));
-    });
+    } catch (error) {
+        console.error('❌ Error sirviendo imagen:', error);
+        res.status(500).json({ error: 'Error interno del servidor' });
+    }
 });
 
 // Ruta para subir fotos
@@ -208,19 +253,30 @@ app.post('/api/upload', upload.single('photo'), async (req, res) => {
             });
         });
 
-        console.log('📁 Foto guardada localmente en:', req.file.path);
+        // Generar nombre de archivo único
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const extension = path.extname(req.file.originalname);
+        const filename = `${tipo}_${timestamp}${extension}`;
         
+        let sftpPath = null;
         let cloudinaryUrl = null;
         let publicId = null;
+
+        // Subir archivo a servidor SFTP
+        try {
+            sftpPath = await uploadToSFTP(req.file.buffer, filename);
+            console.log('📁 Foto guardada en servidor SFTP:', sftpPath);
+        } catch (error) {
+            console.error('❌ Error subiendo a SFTP:', error);
+            return res.status(500).json({ error: 'Error al guardar archivo en servidor remoto' });
+        }
 
         // Intentar subir a Cloudinary como respaldo (opcional)
         if (process.env.CLOUDINARY_API_SECRET) {
             try {
                 console.log('☁️ Subiendo imagen a Cloudinary como respaldo...');
-                const timestamp = Date.now();
                 const cloudinaryResult = await new Promise((resolve, reject) => {
-                    cloudinary.uploader.upload(
-                        req.file.path,
+                    cloudinary.uploader.upload_stream(
                         {
                             folder: 'entradas',
                             public_id: `${tipo}_${timestamp}`,
@@ -233,14 +289,14 @@ app.post('/api/upload', upload.single('photo'), async (req, res) => {
                         },
                         (error, result) => {
                             if (error) {
-                                console.warn('⚠️ Error en Cloudinary (continuando con archivo local):', error.message);
+                                console.warn('⚠️ Error en Cloudinary (continuando con archivo SFTP):', error.message);
                                 resolve(null);
                             } else {
                                 console.log('✅ Imagen respaldada en Cloudinary:', result.secure_url);
                                 resolve(result);
                             }
                         }
-                    );
+                    ).end(req.file.buffer);
                 });
                 
                 if (cloudinaryResult) {
@@ -248,7 +304,7 @@ app.post('/api/upload', upload.single('photo'), async (req, res) => {
                     publicId = cloudinaryResult.public_id;
                 }
             } catch (error) {
-                console.warn('⚠️ Error con Cloudinary, usando solo archivo local:', error.message);
+                console.warn('⚠️ Error con Cloudinary, usando solo archivo SFTP:', error.message);
             }
         }
 
@@ -257,7 +313,7 @@ app.post('/api/upload', upload.single('photo'), async (req, res) => {
         const dbResult = await new Promise((resolve, reject) => {
             db.run(
                 'INSERT INTO fotos_entradas (tipo, filename, local_path, cloudinary_url, public_id, precio) VALUES (?, ?, ?, ?, ?, ?)',
-                [tipo, req.file.filename, req.file.path, cloudinaryUrl, publicId, precio],
+                [tipo, filename, sftpPath, cloudinaryUrl, publicId, precio],
                 function(err) {
                     if (err) {
                         console.error('❌ Error guardando en BD:', err);
@@ -274,12 +330,12 @@ app.post('/api/upload', upload.single('photo'), async (req, res) => {
         res.json({
             success: true,
             id: dbResult.id,
-            filename: req.file.filename,
-            local_path: req.file.path,
+            filename: filename,
+            sftp_path: sftpPath,
             cloudinary_url: cloudinaryUrl,
             tipo: tipo,
             precio: precio,
-            message: `Foto ${tipo} guardada localmente - $${precio}`
+            message: `Foto ${tipo} guardada en servidor Linux - $${precio}`
         });
 
     } catch (error) {
@@ -296,30 +352,58 @@ app.post('/api/upload', upload.single('photo'), async (req, res) => {
     }
 });
 
-// Ruta para obtener todas las fotos
+// Ruta para obtener todas las fotos con paginación
 app.get('/api/photos', (req, res) => {
-    console.log('📸 Obteniendo todas las fotos...');
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 12; // 12 fotos por página por defecto
+    const offset = (page - 1) * limit;
     
-    db.all(
-        'SELECT * FROM fotos_entradas ORDER BY timestamp DESC',
-        (err, rows) => {
-            if (err) {
-                console.error('❌ Error obteniendo fotos:', err);
-                return res.status(500).json({ error: 'Error al obtener fotos' });
-            }
-            
-            // Modificar las URLs para que apunten al servidor local
-            const photosWithLocalUrls = rows.map(photo => ({
-                ...photo,
-                // Usar URL local como principal, Cloudinary como fallback
-                cloudinary_url: `/api/image/${photo.filename}`,
-                cloudinary_backup: photo.cloudinary_url // Mantener URL original como respaldo
-            }));
-            
-            console.log('✅ Fotos obtenidas:', photosWithLocalUrls.length);
-            res.json(photosWithLocalUrls);
+    console.log(`📸 Obteniendo fotos - Página: ${page}, Límite: ${limit}, Offset: ${offset}`);
+    
+    // Obtener total de fotos para calcular total de páginas
+    db.get('SELECT COUNT(*) as total FROM fotos_entradas', (err, countResult) => {
+        if (err) {
+            console.error('❌ Error contando fotos:', err);
+            return res.status(500).json({ error: 'Error al contar fotos' });
         }
-    );
+        
+        const totalPhotos = countResult.total;
+        const totalPages = Math.ceil(totalPhotos / limit);
+        
+        // Obtener fotos de la página actual
+        db.all(
+            'SELECT * FROM fotos_entradas ORDER BY timestamp DESC LIMIT ? OFFSET ?',
+            [limit, offset],
+            (err, rows) => {
+                if (err) {
+                    console.error('❌ Error obteniendo fotos:', err);
+                    return res.status(500).json({ error: 'Error al obtener fotos' });
+                }
+                
+                // Modificar las URLs para que apunten al servidor local
+                const photosWithLocalUrls = rows.map(photo => ({
+                    ...photo,
+                    // Usar URL local como principal, Cloudinary como fallback
+                    cloudinary_url: `/api/image/${photo.filename}`,
+                    cloudinary_backup: photo.cloudinary_url // Mantener URL original como respaldo
+                }));
+                
+                console.log(`✅ Fotos obtenidas: ${photosWithLocalUrls.length} de ${totalPhotos} total`);
+                
+                res.json({
+                    photos: photosWithLocalUrls,
+                    pagination: {
+                        current_page: page,
+                        total_pages: totalPages,
+                        total_photos: totalPhotos,
+                        photos_per_page: limit,
+                        has_next: page < totalPages,
+                        has_prev: page > 1
+                    }
+                });
+            }
+        );
+    });
 });
 
 // Ruta para obtener fotos por tipo
@@ -555,59 +639,48 @@ app.get('/api/database-stats', (req, res) => {
                     total_size_mb: 0,
                     average_size_kb: 0,
                     database_size_mb: 0,
-                    storage_location: fs.existsSync(PHOTOS_DIR) ? PHOTOS_DIR : 'uploads/',
+                    storage_location: `SFTP: ${sftpConfig.host}:${SFTP_REMOTE_PATH}`,
                     photos_today: 0
                 });
             }
             
-            files.forEach((file, index) => {
-                if (file.local_path && fs.existsSync(file.local_path)) {
-                    try {
-                        const fileStats = fs.statSync(file.local_path);
-                        totalSize += fileStats.size;
-                    } catch (error) {
-                        console.warn('⚠️ No se puede leer archivo:', file.local_path);
-                    }
-                }
-                
-                checkedFiles++;
-                
-                // Cuando se hayan verificado todos los archivos
-                if (checkedFiles === files.length) {
-                    // Obtener tamaño de la base de datos
-                    let dbSize = 0;
-                    try {
-                        const dbStats = fs.statSync(dbPath);
-                        dbSize = dbStats.size;
-                    } catch (error) {
-                        console.warn('⚠️ No se puede obtener tamaño de BD');
+            // Para SFTP, estimaremos el tamaño basado en número de archivos
+            // ya que no podemos verificar fácilmente el tamaño de cada archivo remoto
+            const estimatedSizePerPhoto = 150; // KB promedio estimado por foto comprimida
+            totalSize = files.length * estimatedSizePerPhoto * 1024; // Convertir a bytes
+            
+            // Obtener tamaño de la base de datos
+            let dbSize = 0;
+            try {
+                const dbStats = fs.statSync(dbPath);
+                dbSize = dbStats.size;
+            } catch (error) {
+                console.warn('⚠️ No se puede obtener tamaño de BD');
+            }
+            
+            // Contar fotos de hoy
+            const today = new Date().toISOString().split('T')[0];
+            db.get(
+                'SELECT COUNT(*) as photos_today FROM fotos_entradas WHERE date(timestamp) = ?',
+                [today],
+                (err, todayCount) => {
+                    if (err) {
+                        console.error('❌ Error contando fotos de hoy:', err);
                     }
                     
-                    // Contar fotos de hoy
-                    const today = new Date().toISOString().split('T')[0];
-                    db.get(
-                        'SELECT COUNT(*) as photos_today FROM fotos_entradas WHERE date(timestamp) = ?',
-                        [today],
-                        (err, todayCount) => {
-                            if (err) {
-                                console.error('❌ Error contando fotos de hoy:', err);
-                            }
-                            
-                            const finalStats = {
-                                total_photos: stats.total_photos,
-                                total_size_mb: (totalSize / (1024 * 1024)).toFixed(2),
-                                average_size_kb: stats.total_photos > 0 ? (totalSize / 1024 / stats.total_photos).toFixed(2) : 0,
-                                database_size_mb: (dbSize / (1024 * 1024)).toFixed(2),
-                                storage_location: fs.existsSync(PHOTOS_DIR) ? PHOTOS_DIR : 'uploads/',
-                                photos_today: todayCount ? todayCount.photos_today : 0
-                            };
-                            
-                            console.log('✅ Estadísticas de BD:', finalStats);
-                            res.json(finalStats);
-                        }
-                    );
+                    const finalStats = {
+                        total_photos: stats.total_photos,
+                        total_size_mb: (totalSize / (1024 * 1024)).toFixed(2),
+                        average_size_kb: stats.total_photos > 0 ? (totalSize / 1024 / stats.total_photos).toFixed(2) : estimatedSizePerPhoto,
+                        database_size_mb: (dbSize / (1024 * 1024)).toFixed(2),
+                        storage_location: `SFTP: ${sftpConfig.host}:${SFTP_REMOTE_PATH}`,
+                        photos_today: todayCount ? todayCount.photos_today : 0
+                    };
+                    
+                    console.log('✅ Estadísticas de BD:', finalStats);
+                    res.json(finalStats);
                 }
-            });
+            );
         });
     });
 });

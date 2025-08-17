@@ -499,6 +499,37 @@
                         <p class="mt-2">Cargando fotos...</p>
                     </div>
                 </div>
+                
+                <!-- Controles de paginación -->
+                <div class="d-flex justify-content-between align-items-center mt-4" id="paginationContainer" style="display: none !important;">
+                    <div>
+                        <small class="text-muted">
+                            Mostrando <span id="photosInfo">0</span> fotos
+                        </small>
+                    </div>
+                    <nav>
+                        <ul class="pagination pagination-sm mb-0">
+                            <li class="page-item" id="prevPageItem">
+                                <button class="page-link" onclick="loadGalleryPage(currentPage - 1)">
+                                    <i class="bi bi-chevron-left"></i> Anterior
+                                </button>
+                            </li>
+                            <li class="page-item active" id="currentPageItem">
+                                <span class="page-link" id="currentPageText">1</span>
+                            </li>
+                            <li class="page-item" id="nextPageItem">
+                                <button class="page-link" onclick="loadGalleryPage(currentPage + 1)">
+                                    Siguiente <i class="bi bi-chevron-right"></i>
+                                </button>
+                            </li>
+                        </ul>
+                    </nav>
+                    <div>
+                        <small class="text-muted">
+                            Página <span id="pageInfo">1 de 1</span>
+                        </small>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -510,6 +541,8 @@
         let currentPrices = { general: 50, vip: 100 };
         let isOnline = navigator.onLine;
         let isAuthenticated = false;
+        let currentPage = 1;
+        let photosPerPage = 12;
 
         // Sistema de autenticación
         const REQUIRED_PASSWORD = '17577855';
@@ -914,22 +947,32 @@
 
         // Función para cargar la galería
         async function loadGallery() {
-            console.log('🖼️ Cargando galería...');
+            await loadGalleryPage(1);
+        }
+
+        // Función para cargar una página específica de la galería
+        async function loadGalleryPage(page = 1) {
+            console.log(`🖼️ Cargando galería - Página ${page}...`);
             
             try {
-                const response = await fetch('/api/photos');
+                const response = await fetch(`/api/photos?page=${page}&limit=${photosPerPage}`);
                 
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
                 
-                const photos = await response.json();
-                console.log('📸 Fotos obtenidas:', photos.length);
+                const data = await response.json();
+                const photos = data.photos;
+                const pagination = data.pagination;
+                
+                console.log('📸 Fotos obtenidas:', photos.length, 'de', pagination.total_photos);
+                
+                currentPage = pagination.current_page;
                 
                 const gallery = document.getElementById('gallery');
                 gallery.innerHTML = '';
 
-                if (photos.length === 0) {
+                if (photos.length === 0 && pagination.total_photos === 0) {
                     gallery.innerHTML = `
                         <div style="text-align: center; color: #666; grid-column: 1/-1; padding: 40px;">
                             <p style="font-size: 3rem; margin-bottom: 20px;">📷</p>
@@ -937,6 +980,7 @@
                             <p style="font-size: 0.9rem; color: #999;">¡Toma tu primera foto!</p>
                         </div>
                     `;
+                    document.getElementById('paginationContainer').style.display = 'none';
                     return;
                 }
 
@@ -972,6 +1016,9 @@
                     gallery.appendChild(photoElement);
                 });
 
+                // Actualizar controles de paginación
+                updatePaginationControls(pagination);
+
             } catch (error) {
                 console.error('❌ Error al cargar galería:', error);
                 const gallery = document.getElementById('gallery');
@@ -981,9 +1028,45 @@
                         <p>Error al cargar las fotos</p>
                         <small style="color: #6c757d;">Verifica tu conexión</small>
                         <br><br>
-                        <button class="refresh-btn" onclick="loadGallery()">🔄 Reintentar</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadGallery()">🔄 Reintentar</button>
                     </div>
                 `;
+                document.getElementById('paginationContainer').style.display = 'none';
+            }
+        }
+
+        // Función para actualizar controles de paginación
+        function updatePaginationControls(pagination) {
+            const paginationContainer = document.getElementById('paginationContainer');
+            const prevPageItem = document.getElementById('prevPageItem');
+            const nextPageItem = document.getElementById('nextPageItem');
+            const currentPageText = document.getElementById('currentPageText');
+            const pageInfo = document.getElementById('pageInfo');
+            const photosInfo = document.getElementById('photosInfo');
+
+            // Mostrar información
+            currentPageText.textContent = pagination.current_page;
+            pageInfo.textContent = `${pagination.current_page} de ${pagination.total_pages}`;
+            photosInfo.textContent = `${pagination.photos_per_page * (pagination.current_page - 1) + 1}-${Math.min(pagination.photos_per_page * pagination.current_page, pagination.total_photos)} de ${pagination.total_photos}`;
+
+            // Habilitar/deshabilitar botones
+            if (pagination.has_prev) {
+                prevPageItem.classList.remove('disabled');
+            } else {
+                prevPageItem.classList.add('disabled');
+            }
+
+            if (pagination.has_next) {
+                nextPageItem.classList.remove('disabled');
+            } else {
+                nextPageItem.classList.add('disabled');
+            }
+
+            // Mostrar controles si hay más de una página
+            if (pagination.total_pages > 1) {
+                paginationContainer.style.display = 'flex';
+            } else {
+                paginationContainer.style.display = 'none';
             }
         }
 
