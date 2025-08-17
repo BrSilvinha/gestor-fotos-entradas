@@ -410,11 +410,9 @@
                 <!-- Opciones de cámara para móviles -->
                 <div class="text-center mb-3">
                     <small class="text-muted">
-                        <i class="bi bi-camera"></i> En móviles: se abrirá automáticamente la cámara trasera (sin flash)
+                        <i class="bi bi-camera"></i> Se abrirá tu cámara directamente (sin flash) - Presiona Espacio para capturar
                     </small>
                 </div>
-
-                <input type="file" id="photoInput" accept="image/*" capture="environment" class="hidden">
                 
                 <!-- Cámara avanzada con control de flash -->
                 <div id="advancedCamera" class="hidden">
@@ -679,13 +677,8 @@
                 document.getElementById('btnGeneral').style.opacity = type === 'general' ? '1' : '0.7';
                 document.getElementById('btnVip').style.opacity = type === 'vip' ? '1' : '0.7';
                 
-                // Intentar usar cámara avanzada primero (sin flash), si falla usar input file
-                if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                    startAdvancedCamera();
-                } else {
-                    // Fallback al método de input file
-                    document.getElementById('photoInput').click();
-                }
+                // Siempre usar cámara avanzada directa (sin flash)
+                startAdvancedCamera();
             });
         }
 
@@ -734,10 +727,19 @@
                 showStatus('📷 Cámara lista - Sin flash', 'info');
                 
             } catch (error) {
-                console.log('❌ Error con cámara avanzada, usando fallback:', error.message);
-                // Fallback al método de input file
-                document.getElementById('photoInput').click();
-                cameraMode = 'file';
+                console.error('❌ Error accediendo a la cámara:', error.message);
+                
+                let errorMessage = 'Error al acceder a la cámara';
+                if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    errorMessage = 'Acceso a la cámara denegado. Por favor, permite el acceso a la cámara y recarga la página.';
+                } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+                    errorMessage = 'No se encontró ninguna cámara en este dispositivo.';
+                } else if (error.name === 'NotSupportedError') {
+                    errorMessage = 'Tu navegador no soporta acceso directo a la cámara.';
+                }
+                
+                showStatus(errorMessage, 'error');
+                resetButtons();
             }
         }
 
@@ -854,15 +856,7 @@
             }
         }
 
-        // Event listener para el input de archivos
-        document.getElementById('photoInput').addEventListener('change', async function(e) {
-            const file = e.target.files[0];
-            if (file) {
-                await processImageFile(file);
-            } else {
-                resetButtons();
-            }
-        });
+        // Nota: Ya no usamos input file, todo se maneja con cámara directa
 
         function resetButtons() {
             document.getElementById('btnGeneral').style.opacity = '1';
@@ -929,7 +923,6 @@
         function resetForNextPhoto() {
             selectedFile = null;
             pendingFile = null; // Limpiar foto pendiente después de subir
-            document.getElementById('photoInput').value = '';
             document.getElementById('photoPreview').classList.add('hidden');
             
             // Cerrar cámara avanzada si está abierta
@@ -983,7 +976,6 @@
             pendingFile = null;
             selectedType = '';
             document.getElementById('photoPreview').classList.add('hidden');
-            document.getElementById('photoInput').value = '';
             
             // Cerrar cámara avanzada si está abierta
             if (cameraMode === 'advanced') {
